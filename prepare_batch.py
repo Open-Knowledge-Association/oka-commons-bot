@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import swisstopo as s
@@ -37,11 +38,18 @@ def collection_order():
 
 
 def dry_run(title, text):
-    out = subprocess.run(["curl", "-s", "--retry", "3", "-A", s.UA, s.COMMONS_API, "--data-urlencode", "action=parse",
-                          "--data-urlencode", "format=json", "--data-urlencode", "prop=categories|text",
-                          "--data-urlencode", "title=" + title, "--data-urlencode", "text=" + text],
-                         capture_output=True).stdout
-    p = json.loads(out)["parse"]
+    for attempt in range(6):  # the parser occasionally answers with an empty or error response
+        out = subprocess.run(["curl", "-s", "--retry", "3", "-A", s.UA, s.COMMONS_API, "--data-urlencode", "action=parse",
+                              "--data-urlencode", "format=json", "--data-urlencode", "prop=categories|text",
+                              "--data-urlencode", "title=" + title, "--data-urlencode", "text=" + text],
+                             capture_output=True).stdout
+        try:
+            p = json.loads(out)["parse"]
+            break
+        except (ValueError, KeyError):
+            if attempt == 5:
+                raise
+            time.sleep(min(5 * 3 ** attempt, 120))
     cats = p["categories"]
     problems = [c["*"] for c in cats if "missing" in c or re.search("rroneous|error|without|lacking|invalid", c["*"], re.I)]
     if re.search(r'class="(?:error|scribunto-error)', p["text"]["*"]):
@@ -50,6 +58,14 @@ def dry_run(title, text):
 
 
 MAX_HEADING_GAP = 45  # degrees between the recorded heading and the direction of the photographed area
+MAX_ATTEMPTS = 3      # preparation attempts for an image set aside by a failed build or check
+
+
+def retryable(p):
+    """Set aside only because a build or check failed (not uploaded, not a duplicate, not a data problem)."""
+    probs = p.get("problems") or []
+    return (not p.get("uploaded") and not p.get("already_on_commons") and bool(probs)
+            and all(x.startswith(("build failed", "file check failed")) for x in probs))
 
 
 def heading_problems(p):
@@ -97,22 +113,31 @@ def main():
     out_path, count = sys.argv[1], int(sys.argv[2])
     os.makedirs(WORK, exist_ok=True)
 
-    # Images already claimed by another batch file (uploaded, pending or set aside) are never picked again.
-    claimed, earlier = set(), []
+    # Images claimed by another batch file (uploaded or pending) are never picked again. Images only ever
+    # set aside for a fixable reason (a failed build or check) are retried, up to MAX_ATTEMPTS times.
+    claimed, earlier, attempts = set(), [], {}
     for path in glob.glob("batch*.json") + ["test10_v3.json"]:
         if os.path.abspath(path) == os.path.abspath(out_path) or not os.path.exists(path):
             continue
         pages = json.load(open(path, encoding="utf-8"))
-        claimed.update(p["num"] for p in pages)
         earlier += pages
+        for p in pages:
+            if retryable(p):
+                attempts[p["num"]] = attempts.get(p["num"], 0) + 1
+            else:
+                claimed.add(p["num"])
+    retry = [n for n, k in attempts.items() if n not in claimed and k < MAX_ATTEMPTS]
+    claimed.update(attempts)  # retried below or given up; not picked as new images
 
-    # 1. missing stereo partners of files already uploaded, then the next images not yet on Commons
-    nums = []
+    # 1. set-aside images to retry, missing stereo partners of files already uploaded, then new images
+    nums = retry[:count]
+    print(f"{len(nums)} earlier set-aside images retried", flush=True)
+    n_retry = len(nums)
     for p in earlier:
         n = p.get("partner")
         if n and n not in nums and n not in claimed and f"inventory number {n}" in p["text"] and not s.commons_title(n):
             nums.append(n)
-    print(f"{len(nums)} missing stereo partners added first", flush=True)
+    print(f"{len(nums) - n_retry} missing stereo partners added", flush=True)
     for num in collection_order_cached():
         if len(nums) >= count:
             break

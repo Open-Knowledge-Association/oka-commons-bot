@@ -48,14 +48,14 @@ def main():
         area, _, station = (p.strip() for p in m["PLACE"].partition("|"))
         cam_lat, cam_lon = s.lv95_to_wgs84(m["E"], m["N"])
         c_lon, c_lat = round((b[0] + b[2]) / 2, 5), round((b[1] + b[3]) / 2, 5)
-        canton, muni, bfs = s.canton_and_municipality(c_lon, c_lat)
+        place = s.place_of(c_lon, c_lat)
         return dict(
             commons_title=img["title"], mediainfo_id=ids.get(img["title"], ""), uploaded=img["timestamp"],
             inventory_number=num, date=j.get("DATE_FULL", ""), survey_area=area, station=station,
             camera_lat=cam_lat, camera_lon=cam_lon, camera_altitude_m=m["Z"], heading_deg=m["KAPPA"],
             footprint_west=b[0], footprint_south=b[1], footprint_east=b[2], footprint_north=b[3],
-            footprint_centre_lat=c_lat, footprint_centre_lon=c_lon, municipality=muni,
-            municipality_qid=s.municipality_wikidata(bfs)[0] or "", canton=canton,
+            footprint_centre_lat=c_lat, footprint_centre_lon=c_lon, municipality=place["muni"],
+            municipality_qid=place["qid"] or "", canton=place["code"] or place["country"].upper(),
             stereo_partner=j.get("STEREO_PARTNER") or "", smapshot_id=s.layer_attributes(num).get("smapshot_id", ""),
             swisstopo_url=f"https://data.geo.admin.ch/browser/index.html#/collections/{s.COLLECTION}/items/{s.fid(num)}")
 

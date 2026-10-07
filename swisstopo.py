@@ -2,6 +2,7 @@
 import datetime
 import json
 import subprocess
+import threading
 import time
 import urllib.parse
 
@@ -61,10 +62,50 @@ def boundary(lon, lat, layer):
     return [x["attributes"] for x in r["results"]]
 
 
-def canton_and_municipality(lon, lat):
-    canton = boundary(lon, lat, "ch.swisstopo.swissboundaries3d-kanton-flaeche.fill")[0]["ak"]
-    current = [a for a in boundary(lon, lat, "ch.swisstopo.swissboundaries3d-gemeinde-flaeche.fill") if a.get("is_current_jahr")]
-    return canton, current[0]["gemname"], str(current[0]["gde_nr"])
+# neighbouring countries: code -> (English name as used in Commons categories, German name)
+COUNTRIES = {"ch": ("Switzerland", "Schweiz"), "it": ("Italy", "Italien"), "fr": ("France", "Frankreich"),
+             "de": ("Germany", "Deutschland"), "at": ("Austria", "Österreich"), "li": ("Liechtenstein", "Liechtenstein")}
+_NOMINATIM_LOCK = threading.Lock()
+_NOMINATIM_LAST = [0.0]
+
+
+def place_of(lon, lat):
+    """Municipality, canton or country, Wikidata item and Commons category for a point.
+
+    Inside Switzerland the swisstopo boundaries are used; outside (photos looking across the border)
+    OpenStreetMap's administrative boundaries via Nominatim (at most one request per second).
+    """
+    cantons = boundary(lon, lat, "ch.swisstopo.swissboundaries3d-kanton-flaeche.fill")
+    if cantons:
+        current = [a for a in boundary(lon, lat, "ch.swisstopo.swissboundaries3d-gemeinde-flaeche.fill")
+                   if a.get("is_current_jahr")]
+        if not current:
+            raise ValueError(f"no current municipality at {lat},{lon}")
+        qid, cat = municipality_wikidata(str(current[0]["gde_nr"]))
+        canton_en, canton_de = CANTONS[cantons[0]["ak"]]
+        return dict(country="ch", muni=current[0]["gemname"], qid=qid, cat=cat, canton=canton_en, canton_de=canton_de,
+                    code=cantons[0]["ak"])
+    with _NOMINATIM_LOCK:
+        wait = _NOMINATIM_LAST[0] + 1.1 - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        r = json.loads(http("https://nominatim.openstreetmap.org/reverse", dict(
+            lat=lat, lon=lon, zoom=10, format="jsonv2", extratags=1, **{"accept-language": "en"})))
+        _NOMINATIM_LAST[0] = time.time()
+    code = r.get("address", {}).get("country_code")
+    if code not in COUNTRIES or code == "ch":
+        raise ValueError(f"place at {lat},{lon} not resolved (country {code})")
+    qid = r.get("extratags", {}).get("wikidata")
+    return dict(country=code, muni=r.get("name"), qid=qid, cat=commons_category(qid) if qid else None,
+                canton=None, canton_de=None, code=None)
+
+
+def commons_category(qid):
+    """Commons category (P373) of a Wikidata item."""
+    r = json.loads(http("https://www.wikidata.org/w/api.php", dict(action="wbgetclaims", entity=qid, property="P373",
+                                                                    format="json")))
+    claims = r.get("claims", {}).get("P373", [])
+    return claims[0]["mainsnak"]["datavalue"]["value"] if claims else None
 
 
 _WD = {}
@@ -143,9 +184,9 @@ def build(num, collection_category="Photographs by swisstopo", partner_title=Non
     b = m["bbox"]
     obj_lon, obj_lat = round((b[0] + b[2]) / 2, 5), round((b[1] + b[3]) / 2, 5)
     cam_lat, cam_lon = lv95_to_wgs84(m["E"], m["N"])
-    code, muni, bfs = canton_and_municipality(obj_lon, obj_lat)
-    muni_qid, muni_cat = municipality_wikidata(bfs)
-    canton, canton_de = CANTONS[code]
+    shown = place_of(obj_lon, obj_lat)
+    muni, muni_qid, muni_cat, canton, canton_de = (shown[k] for k in ("muni", "qid", "cat", "canton", "canton_de"))
+    country_en, country_de = COUNTRIES[shown["country"]]
     k = float(m["KAPPA"])
     heading = int(k) if k.is_integer() else k
 
@@ -155,18 +196,27 @@ def build(num, collection_category="Photographs by swisstopo", partner_title=Non
     h, w = (min(a, c), max(a, c)) if landscape else (max(a, c), min(a, c))
     fmt = lambda x: int(x) if x.is_integer() else x
 
-    wanted = [f"{year} photographs of Switzerland", f"{decade} photographs of Switzerland",
-              f"{year} in the canton of {canton}", f"Canton of {canton} in the {decade}",
-              f"Black and white photographs of the canton of {canton}", muni_cat or ""]
+    if canton:  # area shown lies in Switzerland
+        wanted = [f"{year} photographs of Switzerland", f"{decade} photographs of Switzerland",
+                  f"{year} in the canton of {canton}", f"Canton of {canton} in the {decade}",
+                  f"Black and white photographs of the canton of {canton}", muni_cat or ""]
+        fallback_bw = "Black and white photographs of Switzerland"
+    else:  # photo looking across the border
+        # no "{year} in {country}" as well: "{year} photographs of {country}" is already inside it
+        wanted = [f"{year} photographs of {country_en}", f"{decade} photographs of {country_en}", "", "",
+                  f"Black and white photographs of {country_en}", muni_cat or ""]
+        fallback_bw = None
     have = existing_categories([x for x in wanted if x])
-    first = lambda *opts: next((o for o in opts if o in have), None)
+    first = lambda *opts: next((o for o in opts if o and o in have), None)
     cats = [collection_category,
             first(wanted[0], wanted[1]),
             first(wanted[2], wanted[3]),
-            first(wanted[4]) or "Black and white photographs of Switzerland",
+            first(wanted[4]) or fallback_bw,
             first(muni_cat) if muni_cat else None,
             "Files from swisstopo historic", "Photos uploaded by OKA.wiki"]
     cats = [c for c in cats if c]
+    where_de = f"{muni}, Kanton {canton_de}" if canton else f"{muni}, {country_de}"
+    where_en = f"{muni}, canton of {canton}" if canton else f"{muni}, {country_en}"
 
     label = f"{area} – {station}" if station else area
     st_de = f", Station {station}" if station else ""
@@ -185,13 +235,13 @@ def build(num, collection_category="Photographs by swisstopo", partner_title=Non
     if layer.get("smapshot_id"):
         fields.append(("3D view", f"[https://smapshot.heig-vd.ch/visit/{layer['smapshot_id']} georeferenced view on Smapshot]"))
     other = "\n                      ".join(f"{{{{Information field|name={k}|value={v}}}}}" for k, v in fields)
-    place = muni_qid or f"{muni}, {canton}, Switzerland"
+    place = muni_qid or (f"{muni}, {canton}, Switzerland" if canton else f"{muni}, {country_en}")
     text = f"""=={{{{int:filedesc}}}}==
 {{{{Photograph
  |photographer      = Q685592
  |title             = {{{{Title|{label}|lang=de}}}}
- |description       = {{{{de|1=Terrestrische photogrammetrische Aufnahme, Aufnahmegebiet {area}{st_de}. Aufgenommen Richtung {heading}°; abgebildetes Gebiet: {muni}, Kanton {canton_de}.}}}}
-                      {{{{en|1=Terrestrial photogrammetric survey photograph, {area} survey{st_en}. Taken facing {heading}°; area shown: {muni}, canton of {canton}.}}}}
+ |description       = {{{{de|1=Terrestrische photogrammetrische Aufnahme, Aufnahmegebiet {area}{st_de}. Aufgenommen Richtung {heading}°; abgebildetes Gebiet: {where_de}.}}}}
+                      {{{{en|1=Terrestrial photogrammetric survey photograph, {area} survey{st_en}. Taken facing {heading}°; area shown: {where_en}.}}}}
  |depicted place    = {place}
  |date              = {date}
  |medium            = {{{{Technique|photograph|adj=black and white|on=glass}}}}
@@ -203,12 +253,11 @@ def build(num, collection_category="Photographs by swisstopo", partner_title=Non
  |other_fields      = {other}
 }}}}
 {{{{Location|{cam_lat}|{cam_lon}|region:CH_heading:{heading}}}}}
-{{{{Object location|{obj_lat}|{obj_lon}|region:CH}}}}
+{{{{Object location|{obj_lat}|{obj_lon}|region:{shown['country'].upper()}}}}}
 
 """ + "\n".join(f"[[Category:{c}]]" for c in cats) + "\n"
-    cam_code, cam_muni, cam_bfs = canton_and_municipality(cam_lon, cam_lat)
     sdc = structured_data(
-        num=m["INVENTORY_NUMBER"], date=date, depicted=muni_qid, created_at=municipality_wikidata(cam_bfs)[0],
+        num=m["INVENTORY_NUMBER"], date=date, depicted=muni_qid, created_at=place_of(cam_lon, cam_lat)["qid"],
         url=f"https://data.geo.admin.ch/browser/index.html#/collections/{COLLECTION}/items/{fid(num)}",
         camera=(cam_lat, cam_lon, heading), area=(obj_lat, obj_lon),
         captions={
