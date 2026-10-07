@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import swisstopo as s
 
@@ -27,7 +28,9 @@ def thumb_ok(title):
 
 def main():
     pages = [p for p in json.load(open(sys.argv[1], encoding="utf-8")) if p.get("uploaded")]
-    failed = [p["title"] for p in pages if not thumb_ok(p["title"])]
+    with ThreadPoolExecutor(8) as pool:
+        ok = list(pool.map(thumb_ok, [p["title"] for p in pages]))
+    failed = [p["title"] for p, good in zip(pages, ok) if not good]
     for t in failed:
         print("no preview:", t)
     print(f"previews: {len(pages) - len(failed)}/{len(pages)} render")

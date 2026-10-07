@@ -4,7 +4,7 @@
 !/LICENSE
 !/README.md
 !/requirements.txt
-!/run_batch.sh
+!/pipeline.py
 !/botsession.py
 !/swisstopo.py
 !/strip_overviews.py

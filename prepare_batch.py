@@ -15,12 +15,14 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import swisstopo as s
 from strip_overviews import strip_overviews
 from verify_strip import verify
 
 WORK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "work")
+WORKERS = 8  # images prepared in parallel (network-bound)
 
 
 def collection_order():
@@ -81,6 +83,9 @@ def prepare_one(num, partner_title):
         strip_overviews(src, dst)
         p["verified"] = verify(src, dst)
         p["stripped"] = dst
+        p["source_sha1"] = sha
+        if p["verified"]:
+            os.remove(src)  # the verified stripped copy is all the upload needs
         p["problems"] = dry_run(p["title"], p["text"]) + heading_problems(p)
     except Exception as e:
         p.update(verified=False, problems=[f"file check failed: {type(e).__name__}: {e}"])
@@ -92,47 +97,74 @@ def main():
     out_path, count = sys.argv[1], int(sys.argv[2])
     os.makedirs(WORK, exist_ok=True)
 
-    # 1. missing stereo partners of files already uploaded, then the next images not yet on Commons
-    nums = []
+    # Images already claimed by another batch file (uploaded, pending or set aside) are never picked again.
+    claimed, earlier = set(), []
     for path in glob.glob("batch*.json") + ["test10_v3.json"]:
         if os.path.abspath(path) == os.path.abspath(out_path) or not os.path.exists(path):
             continue
-        for p in json.load(open(path, encoding="utf-8")):
-            n = p.get("partner")
-            if n and n not in nums and f"inventory number {n}" in p["text"] and not s.commons_title(n):
-                nums.append(n)
+        pages = json.load(open(path, encoding="utf-8"))
+        claimed.update(p["num"] for p in pages)
+        earlier += pages
+
+    # 1. missing stereo partners of files already uploaded, then the next images not yet on Commons
+    nums = []
+    for p in earlier:
+        n = p.get("partner")
+        if n and n not in nums and n not in claimed and f"inventory number {n}" in p["text"] and not s.commons_title(n):
+            nums.append(n)
     print(f"{len(nums)} missing stereo partners added first", flush=True)
-    for num in collection_order():
-        if num in nums:
+    for num in collection_order_cached():
+        if len(nums) >= count:
+            break
+        if num in nums or num in claimed:
             continue
-        if s.commons_title(num):
+        if s.commons_title(num):  # uploaded by someone else, or before batch files existed
             continue
         nums.append(num)
-        if len(nums) == count:
-            break
-    titles = {}
-    for n in nums:
-        try:
-            titles[n] = s.file_title(s.metadata(n)["PLACE"], n)
-        except Exception:
-            pass  # recorded as a problem when the image is prepared
 
-    # 2. build, download, strip, verify, dry-run
-    pages = []
-    for i, num in enumerate(nums):
-        try:
-            partner = str(s.metadata(num)["json"].get("STEREO_PARTNER") or "")
-        except Exception:
-            partner = ""
-        partner_title = titles.get(partner) or (s.commons_title(partner) if partner else None)
-        p = prepare_one(num, partner_title)
-        pages.append(p)
-        print(f"{i + 1}/{len(nums)} {p['title']} | duplicate: {p['already_on_commons']} | verified: {p['verified']}"
-              f" | problems: {p['problems']}", flush=True)
-        json.dump(pages, open(out_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    with ThreadPoolExecutor(WORKERS) as pool:
+        titles = dict(zip(nums, pool.map(_title_or_none, nums)))
+
+        # 2. build, download, strip, verify, dry-run (WORKERS images at a time)
+        def job(num):
+            try:
+                partner = str(s.metadata(num)["json"].get("STEREO_PARTNER") or "")
+            except Exception:
+                partner = ""
+            partner_title = titles.get(partner) or (s.commons_title(partner) if partner else None)
+            return prepare_one(num, partner_title)
+
+        pages, done = [None] * len(nums), 0
+        futures = {pool.submit(job, n): i for i, n in enumerate(nums)}
+        for fut in as_completed(futures):
+            p = pages[futures[fut]] = fut.result()
+            done += 1
+            print(f"{done}/{len(nums)} {p['title']} | duplicate: {p['already_on_commons']} | verified: {p['verified']}"
+                  f" | problems: {p['problems']}", flush=True)
+    tmp = out_path + ".tmp"
+    json.dump(pages, open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    os.replace(tmp, out_path)
 
     bad = [p["num"] for p in pages if p["already_on_commons"] or not p["verified"] or p["problems"]]
     print(f"prepared {len(pages)}; not ready: {bad}")
+
+
+def _title_or_none(num):
+    try:
+        return s.file_title(s.metadata(num)["PLACE"], num)
+    except Exception:
+        return None  # recorded as a problem when the image is prepared
+
+
+ORDER_CACHE = "collection_order.json"
+
+
+def collection_order_cached():
+    """swisstopo's item order, fetched once (about 570 STAC pages) and kept locally."""
+    if not os.path.exists(ORDER_CACHE):
+        order = list(collection_order())
+        json.dump(order, open(ORDER_CACHE, "w"))
+    return json.load(open(ORDER_CACHE))
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ For each image the bot:
    decoded pixels are equal);
 4. skips images already on Commons (SHA-1 of the source and inventory-number search) and sets aside any record
    that fails a check (template errors on a dry-run parse, heading not pointing at the photographed area, …);
-5. uploads one file at a time, verifies the SHA-1 on Commons, retries transient server errors, and adds
+5. uploads in parallel processes (each at most one edit per second), verifies the SHA-1 on Commons, retries transient server errors, and adds
    structured data (creator, inception, collection + inventory number, depicts, location of creation,
    material, source, licence, camera coordinates with heading, captions in en/de/fr);
 6. after each batch, checks that every preview renders, links stereo partners by file name once both are
@@ -39,7 +39,7 @@ For each image the bot:
 pip install -r requirements.txt
 export COMMONS_BOT_USER="OKA bot@<bot password name>"   # from Special:BotPasswords
 export COMMONS_BOT_PASSWORD="..."
-bash run_batch.sh batch002 1000                         # progress in batch002.log, last line starts with RESULT
+python pipeline.py --start 3 --batches 10               # 10 batches of 1000; progress in pipeline.log
 ```
 
 On Windows the two variables may also be set as user environment variables. Credentials are never written
@@ -47,7 +47,7 @@ to this repository.
 
 | Script | Purpose |
 |---|---|
-| `run_batch.sh` | one unattended batch: prepare, upload, check previews, link partners, refresh the list |
+| `pipeline.py` | runs batches unattended: prepares the next batch while the current one uploads with 4 parallel processes (at most one edit per second each), then checks previews, links partners, refreshes the list; stops for review on any failure |
 | `prepare_batch.py` | picks the next images, builds pages, downloads, strips, verifies, dry-runs |
 | `swisstopo.py` | swisstopo metadata access and the page / structured-data builder |
 | `upload.py` | uploads a prepared batch and writes structured data |
