@@ -52,7 +52,7 @@ to this repository.
 | `swisstopo.py` | swisstopo metadata access and the page / structured-data builder |
 | `upload.py` | uploads a prepared batch and writes structured data |
 | `check_thumbs.py`, `link_partners.py`, `make_manifest.py` | post-batch checks, partner links, upload list |
-| `edit_pages.py`, `mateusz.py` | updates of earlier uploads to the current format |
+| `edit_pages.py` | updates earlier uploads by the bot to the current format |
 
 ## Licence
 

@@ -1,6 +1,6 @@
 """Replace stereo-partner inventory numbers with file links once the partner is on Commons.
 
-Looks at every batch file (batch*.json, test10_v3.json, mateusz20.json) for pages
+Looks at every batch file (batch*.json, test10_v3.json) for pages
 whose "Stereo pair" field still names the partner by number, and edits the live
 page as OKA bot when the partner file now exists. Only that one string changes.
 
@@ -18,7 +18,7 @@ STATE = "partners_linked.json"
 
 def candidates():
     seen = set()
-    for path in sorted(glob.glob("batch*.json")) + ["test10_v3.json", "mateusz20.json"]:
+    for path in sorted(glob.glob("batch*.json")) + ["test10_v3.json"]:
         try:
             pages = json.load(open(path, encoding="utf-8"))
         except FileNotFoundError:
