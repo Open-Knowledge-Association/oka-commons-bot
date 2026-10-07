@@ -1,0 +1,19 @@
+# Allowlist: only the bot's own source and docs are published.
+/*
+!/.gitignore
+!/LICENSE
+!/README.md
+!/requirements.txt
+!/run_batch.sh
+!/botsession.py
+!/swisstopo.py
+!/strip_overviews.py
+!/verify_strip.py
+!/prepare_batch.py
+!/upload.py
+!/check_thumbs.py
+!/link_partners.py
+!/make_manifest.py
+!/edit_pages.py
+!/mateusz.py
+!/uploads.csv

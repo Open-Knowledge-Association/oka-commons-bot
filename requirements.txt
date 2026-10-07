@@ -1,0 +1,4 @@
+pywikibot>=11
+tifffile
+imagecodecs
+numpy
