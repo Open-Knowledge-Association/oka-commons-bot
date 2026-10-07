@@ -2,6 +2,7 @@
 import datetime
 import json
 import subprocess
+import time
 import urllib.parse
 
 UA = "OKA-bot/0.1 (https://commons.wikimedia.org/wiki/User:OKA_bot; jz@oka.wiki)"
@@ -78,18 +79,35 @@ def municipality_wikidata(bfs):
     return _WD[bfs]
 
 
+def commons_query(params, attempts=6):
+    """Commons API query that retries rate limits and transient errors (5 s, 15 s, 45 s, 2 min ...)."""
+    for attempt in range(attempts):
+        try:
+            r = json.loads(http(COMMONS_API, {**params, "maxlag": 5}))
+            if "query" in r or ("error" not in r and "batchcomplete" in r):
+                return r
+            reason = r.get("error", {}).get("code", "no query result")
+        except (subprocess.CalledProcessError, ValueError) as e:
+            reason = type(e).__name__
+        if attempt == attempts - 1:
+            raise RuntimeError(f"Commons query failed after {attempts} attempts ({reason}): {params}")
+        wait = min(5 * 3 ** attempt, 120)
+        print(f"Commons query: {reason}; retrying in {wait} s", flush=True)
+        time.sleep(wait)
+
+
 def existing_categories(names):
-    r = json.loads(http(COMMONS_API, dict(action="query", titles="|".join("Category:" + n for n in names), format="json")))
+    r = commons_query(dict(action="query", titles="|".join("Category:" + n for n in names), format="json"))
     return {p["title"][9:] for p in r["query"]["pages"].values() if "missing" not in p}
 
 
 def on_commons(num, sha1):
     """True if the source file or any file mentioning this inventory number is already on Commons."""
-    r = json.loads(http(COMMONS_API, dict(action="query", list="allimages", aisha1=sha1, format="json")))
+    r = commons_query(dict(action="query", list="allimages", aisha1=sha1, format="json"))
     if r["query"]["allimages"]:
         return True
-    r = json.loads(http(COMMONS_API, dict(action="query", list="search", srnamespace=6, format="json",
-                                          srsearch=f'"Swisstopo {num}" OR insource:"{fid(num)}"')))
+    r = commons_query(dict(action="query", list="search", srnamespace=6, format="json",
+                           srsearch=f'"Swisstopo {num}" OR insource:"{fid(num)}"'))
     return bool(r["query"]["search"])
 
 
@@ -100,8 +118,8 @@ def file_title(place, num):
 
 def commons_title(num):
     """Title of the Commons file for this inventory number, if one exists."""
-    r = json.loads(http(COMMONS_API, dict(action="query", list="search", srnamespace=6, format="json",
-                                          srsearch=f'intitle:"Swisstopo {num}"')))
+    r = commons_query(dict(action="query", list="search", srnamespace=6, format="json",
+                           srsearch=f'intitle:"Swisstopo {num}"'))
     hits = [h["title"] for h in r["query"]["search"] if h["title"].endswith(f"Swisstopo {num}.tif")]
     return hits[0] if len(hits) == 1 else None
 
