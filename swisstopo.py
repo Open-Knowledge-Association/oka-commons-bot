@@ -1,6 +1,7 @@
 """Fetch swisstopo terrestrial images and build their Commons file pages."""
 import datetime
 import json
+import re
 import subprocess
 import threading
 import time
@@ -28,7 +29,15 @@ CANTONS = {
 def http(url, params=None, binary=False):
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    out = subprocess.run(["curl", "-sfL", "--retry", "3", "-A", UA, url], capture_output=True, check=True).stdout
+    for attempt in range(4):  # curl retries transient HTTP errors itself; this also covers failed connections
+        try:
+            out = subprocess.run(["curl", "-sfL", "--retry", "3", "-A", UA, url], capture_output=True,
+                                 check=True).stdout
+            break
+        except subprocess.CalledProcessError:
+            if attempt == 3:
+                raise
+            time.sleep(5 * 3 ** attempt)
     if binary:
         return out
     try:
@@ -153,8 +162,33 @@ def on_commons(num, sha1):
 
 
 def file_title(place, num):
-    area, _, station = (p.strip() for p in place.partition("|"))
+    """Commons file name; characters not allowed in page titles are dropped (only from the name)."""
+    clean = lambda x: re.sub(r"\s+", " ", re.sub(r"[\[\]#<>|{}]", "", x)).strip()
+    area, _, station = (clean(p) for p in place.partition("|"))
     return f"File:{area} - {station} - Swisstopo {num}.tif" if station else f"File:{area} - Swisstopo {num}.tif"
+
+
+def parse_date(text):
+    """swisstopo DATE_STRING -> Commons date wikitext and Wikidata time values.
+
+    Handles day (11.08.1915), year only (1924) and day ranges (20.03.-13.04.1922, 05.-07.08.1919).
+    Anything else raises ValueError, so the image is set aside instead of guessed.
+    """
+    text = text.strip()
+    iso = lambda d, mth, y: f"{y}-{mth}-{d}"
+    if m := re.fullmatch(r"(\d{2})\.(\d{2})\.(\d{4})", text):
+        day = iso(*m.groups())
+        datetime.date.fromisoformat(day)
+        return dict(wikitext=day, time=day, precision=11, year=m[3])
+    if m := re.fullmatch(r"(\d{4})", text):
+        return dict(wikitext=text, time=f"{text}-00-00", precision=9, year=text)
+    if m := re.fullmatch(r"(\d{2})\.(?:(\d{2})\.)?-(\d{2})\.(\d{2})\.(\d{4})", text):
+        d1, m1, d2, m2, y = m.groups()
+        start, end = iso(d1, m1 or m2, y), iso(d2, m2, y)
+        datetime.date.fromisoformat(start), datetime.date.fromisoformat(end)
+        return dict(wikitext=f"{{{{other date|between|{start}|{end}}}}}", time=f"{y}-{m2 if m1 in (None, m2) else '00'}-00",
+                    precision=10 if m1 in (None, m2) else 9, year=y, earliest=start, latest=end)
+    raise ValueError(f"unrecognised date format {text!r}")
 
 
 def commons_title(num):
@@ -179,8 +213,9 @@ def build(num, collection_category="Photographs by swisstopo", partner_title=Non
     layer = layer_attributes(num)
     area, _, station = (p.strip() for p in m["PLACE"].partition("|"))
     title = file_title(m["PLACE"], num)
-    date = datetime.datetime.strptime(m["DATE_STRING"], "%d.%m.%Y").date().isoformat()
-    year, decade = date[:4], date[:3] + "0s"
+    when = parse_date(m["DATE_STRING"])
+    year = when["year"]
+    decade = year[:3] + "0s"
     b = m["bbox"]
     obj_lon, obj_lat = round((b[0] + b[2]) / 2, 5), round((b[1] + b[3]) / 2, 5)
     cam_lat, cam_lon = lv95_to_wgs84(m["E"], m["N"])
@@ -243,7 +278,7 @@ def build(num, collection_category="Photographs by swisstopo", partner_title=Non
  |description       = {{{{de|1=Terrestrische photogrammetrische Aufnahme, Aufnahmegebiet {area}{st_de}. Aufgenommen Richtung {heading}°; abgebildetes Gebiet: {where_de}.}}}}
                       {{{{en|1=Terrestrial photogrammetric survey photograph, {area} survey{st_en}. Taken facing {heading}°; area shown: {where_en}.}}}}
  |depicted place    = {place}
- |date              = {date}
+ |date              = {when['wikitext']}
  |medium            = {{{{Technique|photograph|adj=black and white|on=glass}}}}
  |dimensions        = {{{{Size|unit=cm|height={fmt(h)}|width={fmt(w)}}}}}
  |institution       = {{{{Institution:Swisstopo}}}}
@@ -257,7 +292,7 @@ def build(num, collection_category="Photographs by swisstopo", partner_title=Non
 
 """ + "\n".join(f"[[Category:{c}]]" for c in cats) + "\n"
     sdc = structured_data(
-        num=m["INVENTORY_NUMBER"], date=date, depicted=muni_qid, created_at=place_of(cam_lon, cam_lat)["qid"],
+        num=m["INVENTORY_NUMBER"], when=when, depicted=muni_qid, created_at=place_of(cam_lon, cam_lat)["qid"],
         url=f"https://data.geo.admin.ch/browser/index.html#/collections/{COLLECTION}/items/{fid(num)}",
         camera=(cam_lat, cam_lon, heading), area=(obj_lat, obj_lon),
         captions={
@@ -280,6 +315,11 @@ def _item(qid):
     return {"value": {"entity-type": "item", "numeric-id": int(qid[1:]), "id": qid}, "type": "wikibase-entityid"}
 
 
+def _time(day, precision):
+    return {"value": {"time": f"+{day}T00:00:00Z", "timezone": 0, "before": 0, "after": 0, "precision": precision,
+                      "calendarmodel": "http://www.wikidata.org/entity/Q1985727"}, "type": "time"}
+
+
 def _snak(prop, datavalue):
     return {"snaktype": "value", "property": prop, "datavalue": datavalue}
 
@@ -292,15 +332,14 @@ def _claim(prop, datavalue, qualifiers=()):
     return c
 
 
-def structured_data(num, date, depicted, created_at, url, camera, area, captions):
+def structured_data(num, when, depicted, created_at, url, camera, area, captions):
     """Commons structured data (wbeditentity payload) for one image."""
     coord = lambda lat, lon: {"value": {"latitude": lat, "longitude": lon, "altitude": None, "precision": 1e-05,
                                         "globe": "http://www.wikidata.org/entity/Q2"}, "type": "globecoordinate"}
     claims = [
         _claim("P170", _item(SWISSTOPO)),                                          # creator
-        _claim("P571", {"value": {"time": f"+{date}T00:00:00Z", "timezone": 0, "before": 0, "after": 0,
-                                  "precision": 11, "calendarmodel": "http://www.wikidata.org/entity/Q1985727"},
-                        "type": "time"}),                                          # inception
+        _claim("P571", _time(when["time"], when["precision"]),                     # inception
+               [(q, _time(when[k], 11)) for q, k in (("P1319", "earliest"), ("P1326", "latest")) if k in when]),
         _claim("P195", _item(SWISSTOPO), [("P217", {"value": num, "type": "string"})]),  # collection + inventory no.
         _claim("P186", _item(PHOTOGRAPHIC_PLATE)),                                 # made from material
         _claim("P7482", _item(FILE_ON_INTERNET), [("P973", {"value": url, "type": "string"}),
