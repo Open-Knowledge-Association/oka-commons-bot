@@ -48,6 +48,25 @@ def stop(msg):
     sys.exit(1)
 
 
+HUNG_AFTER = 20 * 60  # seconds without any log output before an upload process counts as hung
+
+
+def watch(procs, logs):
+    """Wait for the upload processes; stop any that writes nothing for HUNG_AFTER seconds.
+
+    A stopped process loses nothing: its progress file lets the next run continue where it was.
+    Returns the exit codes (a stopped process counts as failed).
+    """
+    while any(p.poll() is None for p in procs):
+        time.sleep(30)
+        for p, path in zip(procs, logs):
+            if p.poll() is None and time.time() - os.path.getmtime(path) > HUNG_AFTER:
+                log(f"{path}: no output for {HUNG_AFTER // 60} min; stopping that process")
+                p.kill()
+                p.wait()
+    return [p.returncode for p in procs]
+
+
 def keep_awake():
     """Ask Windows not to sleep while this process runs (released automatically when it exits)."""
     if sys.platform == "win32":
@@ -89,7 +108,7 @@ def main():
                                   stdout=open(f"{name}.upload-{i}.log", "a", encoding="utf-8"),
                                   stderr=subprocess.STDOUT, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
                  for i in range(a.shards)]
-        codes = [p.wait() for p in procs]
+        codes = watch(procs, [f"{name}.upload-{i}.log" for i in range(a.shards)])
         run(["upload.py", f"{name}.json", "--merge"], f"{name}.log")
         retries = sum(open(f"{name}.upload-{i}.log", encoding="utf-8").read().count("transient server error")
                       for i in range(a.shards))

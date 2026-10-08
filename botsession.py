@@ -79,7 +79,7 @@ def upload_with_retry(site, title, filename, expected_sha1, **kwargs):
 
     for attempt in range(1 + TRANSIENT_RETRIES):
         try:
-            ok = site.upload(pywikibot.FilePage(site, title), source_filename=filename, report_success=False, **kwargs)
+            site.upload(pywikibot.FilePage(site, title), source_filename=filename, report_success=False, **kwargs)
             break
         except Exception as e:  # noqa: BLE001 - anything may hide an upload that did reach Commons
             code = getattr(e, "code", type(e).__name__)
@@ -92,7 +92,9 @@ def upload_with_retry(site, title, filename, expected_sha1, **kwargs):
             if not transient or attempt == TRANSIENT_RETRIES:
                 raise
             print(f"{title}: transient server error {code}; retrying", flush=True)
-    return bool(ok) and stored()
+    # a False result is a warning; if it was "already exists" because an earlier, timed-out attempt went
+    # through, Commons holds our exact file and the upload counts as done
+    return stored()
 
 
 def write_structured_data(site, title, sdc, summary):

@@ -58,6 +58,7 @@ def dry_run(title, text):
 
 
 MAX_HEADING_GAP = 45  # degrees between the recorded heading and the direction of the photographed area
+MIN_TIFF_BYTES = 100_000  # smaller than any real scan
 MAX_ATTEMPTS = 3      # preparation attempts for an image set aside by a failed build or check
 
 
@@ -91,9 +92,12 @@ def prepare_one(num, partner_title):
                     problems=[f"build failed: {type(e).__name__}: {e}"])
     src, dst = os.path.join(WORK, f"{num}.tif"), os.path.join(WORK, f"{num}.stripped.tif")
     try:
-        if not os.path.exists(src):
+        if not os.path.exists(src) or os.path.getsize(src) < MIN_TIFF_BYTES:
+            data = s.http(p["tif_url"], binary=True)
+            if len(data) < MIN_TIFF_BYTES:  # the server occasionally answers with an empty body
+                raise ValueError(f"download returned only {len(data)} bytes")
             with open(src, "wb") as f:
-                f.write(s.http(p["tif_url"], binary=True))
+                f.write(data)
         sha = hashlib.sha1(open(src, "rb").read()).hexdigest()
         p["already_on_commons"] = s.on_commons(num, sha)
         strip_overviews(src, dst)
