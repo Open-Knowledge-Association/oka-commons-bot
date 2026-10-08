@@ -100,14 +100,22 @@ def main():
                         reason = "already on Commons" if p.get("already_on_commons") else (p.get("problems") or ["unverified"])
                         print(f"{p['num']}: skipped, not cleared for upload: {reason}", flush=True)
                         continue
-                    if pywikibot.FilePage(site, p["title"]).exists():
-                        sys.exit(f"{p['title']} already exists; stopping")
                     sha = hashlib.sha1(open(p["stripped"], "rb").read()).hexdigest()
-                    pace()
-                    if not upload_with_retry(site, p["title"], p["stripped"], sha, text=p["text"], ignore_warnings=False,
-                                             comment=f"Upload swisstopo terrestrial image {p['num']} ([[Commons:Bots/Requests/OKA bot]])"):
-                        sys.exit(f"{p['num']}: upload warning, failure or SHA-1 mismatch; stopping")
-                    record(p, uploaded=True)
+                    page = pywikibot.FilePage(site, p["title"])
+                    if page.exists():
+                        info = page.latest_file_info
+                        if info.sha1 == sha and page.oldest_file_info.user == site.username():
+                            # an earlier, interrupted request of ours stored it: carry on with structured data
+                            print(f"{p['num']}: already uploaded by an interrupted run; continuing", flush=True)
+                            record(p, uploaded=True)
+                        else:
+                            sys.exit(f"{p['title']} already exists with other content; stopping")
+                    if not p.get("uploaded"):
+                        pace()
+                        if not upload_with_retry(site, p["title"], p["stripped"], sha, text=p["text"], ignore_warnings=False,
+                                                 comment=f"Upload swisstopo terrestrial image {p['num']} ([[Commons:Bots/Requests/OKA bot]])"):
+                            sys.exit(f"{p['num']}: upload warning, failure or SHA-1 mismatch; stopping")
+                        record(p, uploaded=True)
                 sdc = {**p["sdc"], "claims": [c for c in p["sdc"]["claims"]
                                               if c["mainsnak"]["property"] not in DEFERRED_PROPERTIES]}
                 pace()

@@ -48,7 +48,16 @@ def stop(msg):
     sys.exit(1)
 
 
+def keep_awake():
+    """Ask Windows not to sleep while this process runs (released automatically when it exits)."""
+    if sys.platform == "win32":
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+
+
 def main():
+    keep_awake()
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", type=int, required=True)
     ap.add_argument("--batches", type=int, required=True)

@@ -68,20 +68,31 @@ def upload_with_retry(site, title, filename, expected_sha1, **kwargs):
     import time
     import pywikibot
 
+    # Pywikibot only handles a callable here on every code path (a plain bool crashes when a retried
+    # request comes back with a warning), so wrap a bool into a callable with the same meaning.
+    flag = kwargs.pop("ignore_warnings", False)
+    kwargs["ignore_warnings"] = flag if callable(flag) else (lambda warnings: bool(flag))
+
+    def stored():
+        page = pywikibot.FilePage(site, title)
+        return page.exists() and page.latest_file_info.sha1 == expected_sha1
+
     for attempt in range(1 + TRANSIENT_RETRIES):
         try:
             ok = site.upload(pywikibot.FilePage(site, title), source_filename=filename, report_success=False, **kwargs)
             break
-        except pywikibot.exceptions.APIError as e:
-            if not any(t in e.code for t in TRANSIENT_ERRORS) or attempt == TRANSIENT_RETRIES:
+        except Exception as e:  # noqa: BLE001 - anything may hide an upload that did reach Commons
+            code = getattr(e, "code", type(e).__name__)
+            transient = any(t in code for t in TRANSIENT_ERRORS) or isinstance(
+                e, (pywikibot.exceptions.ServerError, getattr(pywikibot.exceptions, "ApiTimeoutError", pywikibot.exceptions.TimeoutError)))
+            time.sleep(60 if transient else 10)
+            if stored():  # the failed request stored our exact file after all
+                print(f"{title}: {code}, but the file reached Commons intact", flush=True)
+                return True
+            if not transient or attempt == TRANSIENT_RETRIES:
                 raise
-            print(f"{title}: transient server error {e.code}; retrying in 60 s", flush=True)
-            time.sleep(60)
-            page = pywikibot.FilePage(site, title)
-            if page.exists() and page.latest_file_info.sha1 == expected_sha1:
-                ok = True
-                break
-    return bool(ok) and pywikibot.FilePage(site, title).latest_file_info.sha1 == expected_sha1
+            print(f"{title}: transient server error {code}; retrying", flush=True)
+    return bool(ok) and stored()
 
 
 def write_structured_data(site, title, sdc, summary):
