@@ -49,7 +49,7 @@ def new_categories(text):
     """(categories, plan) for a page, or raises ValueError when the page cannot be read unambiguously."""
     title = re.search(r"\{\{Title\|(.+?)\|lang=de\}\}", text)
     area = title.group(1).split(" – ")[0] if title else None
-    shown = re.search(r"area shown: (.+?)\.\}\}", text)
+    shown = re.search(r"area shown: (.+?)\.\}\}", text, re.I)
     year = re.search(r"\|date\s*=\s*(?:\{\{other date\|between\|)?(\d{4})", text)
     if not (area and shown and year):
         raise ValueError("survey area, area shown or year not found")
