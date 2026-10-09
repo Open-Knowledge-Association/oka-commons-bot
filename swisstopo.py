@@ -346,8 +346,12 @@ def _claim(prop, datavalue, qualifiers=()):
     return c
 
 
-def structured_data(num, when, depicted, created_at, url, camera, area, captions):
-    """Commons structured data (wbeditentity payload) for one image."""
+def structured_data(num, when, depicted, created_at, url, camera, area, captions, material=PHOTOGRAPHIC_PLATE,
+                    instance_of=None, extra_depicts=None):
+    """Commons structured data (wbeditentity payload) for one image.
+
+    camera is (lat, lon, heading) or None; heading may be None (vertical aerial photographs).
+    """
     coord = lambda lat, lon: {"value": {"latitude": lat, "longitude": lon, "altitude": None, "precision": 1e-05,
                                         "globe": "http://www.wikidata.org/entity/Q2"}, "type": "globecoordinate"}
     claims = [
@@ -355,17 +359,25 @@ def structured_data(num, when, depicted, created_at, url, camera, area, captions
         _claim("P571", _time(when["time"], when["precision"]),                     # inception
                [(q, _time(when[k], 11)) for q, k in (("P1319", "earliest"), ("P1326", "latest")) if k in when]),
         _claim("P195", _item(SWISSTOPO), [("P217", {"value": num, "type": "string"})]),  # collection + inventory no.
-        _claim("P186", _item(PHOTOGRAPHIC_PLATE)),                                 # made from material
+    ]
+    if material:
+        claims.append(_claim("P186", _item(material)))                             # made from material
+    claims += [
         _claim("P7482", _item(FILE_ON_INTERNET), [("P973", {"value": url, "type": "string"}),
                                                    ("P137", _item(SWISSTOPO))]),   # source of file
         _claim("P275", _item(OPENDATA_SWISS_BY)),                                  # licence
-        _claim("P1259", coord(camera[0], camera[1]),
-               [("P7787", {"value": {"amount": f"+{camera[2]}", "unit": DEGREE}, "type": "quantity"})]),
-        _claim("P9149", coord(*area)),                                             # coordinates of depicted place
     ]
+    if camera:
+        heading = [("P7787", {"value": {"amount": f"+{camera[2]}", "unit": DEGREE}, "type": "quantity"})]             if camera[2] is not None else []
+        claims.append(_claim("P1259", coord(camera[0], camera[1]), heading))      # coordinates of the point of view
+    claims.append(_claim("P9149", coord(*area)))                                   # coordinates of depicted place
     if depicted:
         claims.append(_claim("P180", _item(depicted)))                             # depicts
+    if extra_depicts:
+        claims.append(_claim("P180", _item(extra_depicts)))
     if created_at:
         claims.append(_claim("P1071", _item(created_at)))                          # location of creation
+    if instance_of:
+        claims.append(_claim("P31", _item(instance_of)))                           # instance of
     labels = {lang: {"language": lang, "value": text} for lang, text in captions.items()}
     return {"labels": labels, "claims": claims}

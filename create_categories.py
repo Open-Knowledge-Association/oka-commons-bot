@@ -14,7 +14,6 @@ import time
 import swisstopo as s
 from botsession import commons_site
 
-META = {f"{s.ROOT_CATEGORY} by municipality": "Municipality", f"{s.ROOT_CATEGORY} by year": "Year"}
 
 
 def _existing(names):
@@ -36,26 +35,33 @@ def page_text(plan, have):
                 parents.append(decade)
     lines = [f"{{{{en|1={plan['en']}}}}}", f"{{{{de|1={plan['de']}}}}}", ""]
     for p in parents:
-        sort = f"|{plan['sortkey']}" if p in META or p == s.ROOT_CATEGORY else ""
+        sort = f"|{plan['sortkey']}" if plan.get("sortkey") and (p.endswith((" by municipality", " by year"))
+                                                                  or p.startswith(s.ROOT_CATEGORY)) else ""
         lines.append(f"[[Category:{p}{sort}]]")
     return "\n".join(lines) + "\n"
 
 
 def ensure(site, plans):
-    """Create every category in plans that does not exist yet; returns the names created."""
+    """Create every category in plans that does not exist yet (plus the collection's "by municipality" and
+    "by year" overview categories); returns the names created."""
     import pywikibot
 
     plans = list({p["name"]: p for p in plans}.values())
-    wanted = {p["name"] for p in plans} | set(META)
-    parents = {q for p in plans for q in p["parents"]}
+    metas = {}
+    for p in plans:
+        for q in p["parents"]:
+            for suffix, label, de in ((" by municipality", "municipality", "Gemeinde"), (" by year", "year", "Jahr")):
+                if q.endswith(suffix):
+                    root = q[:-len(suffix)]
+                    metas[q] = dict(name=q, sortkey=label.capitalize(), parents=[root],
+                                    en=f"{root}, by {label}.", de=f"{root}, nach {de}.")
+    is_sub = lambda p: any(q.endswith((" by municipality", " by year")) for q in p["parents"])
+    order = [p for p in plans if not is_sub(p)] + list(metas.values()) + [p for p in plans if is_sub(p)]
+    parents = {q for p in order for q in p["parents"]}
     decades = {f"{q[:3]}0s photographs of Switzerland" for q in parents if q[:4].isdigit()}
-    have = _existing(wanted | parents | decades)
+    have = _existing({p["name"] for p in order} | parents | decades)
     created = []
-    meta_plans = [dict(name=m, sortkey=label, parents=[s.ROOT_CATEGORY],
-                       en=f"Terrestrial survey photographs by swisstopo, by {label.lower()}.",
-                       de=f"Terrestrische Aufnahmen von swisstopo, nach {'Gemeinde' if label == 'Municipality' else 'Jahr'}.")
-                  for m, label in META.items()]
-    for plan in meta_plans + plans:
+    for plan in order:   # collection roots first, then overview categories, then subcategories
         if plan["name"] in have:
             continue
         page = pywikibot.Category(site, plan["name"])
@@ -63,7 +69,7 @@ def ensure(site, plans):
             have.add(plan["name"])
             continue
         page.text = page_text(plan, have)
-        page.save(summary="Category for swisstopo terrestrial photographs uploaded by OKA bot "
+        page.save(summary="Category for swisstopo photographs uploaded by OKA bot "
                           "([[Commons:Bots/Requests/OKA bot]])", bot=True, quiet=True)
         if not pywikibot.Category(site, plan["name"]).exists():
             raise SystemExit(f"{plan['name']}: not created; stopping")
