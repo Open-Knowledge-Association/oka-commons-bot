@@ -12,8 +12,18 @@ import swisstopo as s
 
 
 def thumb_ok(title):
+    """True if Commons renders a preview at 640 px, or (a one-off failure of that size) at 320 and 1280 px."""
+    if _renders(title, 640):
+        return True
+    if _renders(title, 320) and _renders(title, 1280):
+        print(f"640 px preview failed but 320 and 1280 px render: {title}", flush=True)
+        return True
+    return False
+
+
+def _renders(title, width):
     r = json.loads(s.http(s.COMMONS_API, dict(action="query", titles=title, prop="imageinfo", iiprop="url",
-                                               iiurlwidth=640, format="json")))
+                                               iiurlwidth=width, format="json")))
     info = list(r["query"]["pages"].values())[0].get("imageinfo", [{}])[0]
     if "thumburl" not in info:
         return False
