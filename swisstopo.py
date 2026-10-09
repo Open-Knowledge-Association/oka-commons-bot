@@ -207,7 +207,39 @@ def layer_attributes(num):
     return hits[0] if hits else {}
 
 
-def build(num, collection_category="Photographs by swisstopo", partner_title=None):
+ROOT_CATEGORY = "Terrestrial photographs by swisstopo"
+
+
+def _clean(name):
+    return re.sub(r"\s+", " ", re.sub(r"[\[\]#<>|{}]", "", name)).strip()
+
+
+def category_plan(area, muni, muni_cat, year, country_en="Switzerland"):
+    """The three subcategories a file goes into, with what each category page needs.
+
+    Files sit only in these subcategories (plus hidden tracking categories), so general categories such
+    as "1926 photographs of Switzerland" or a municipality get one subcategory link instead of
+    thousands of files (suggestion on Commons, 2026-10-09).
+    """
+    place = muni_cat or muni
+    where = muni if country_en == "Switzerland" else f"{muni}, {country_en}"
+    return [
+        dict(name=f"{ROOT_CATEGORY} - {_clean(area)}", sortkey=_clean(area),
+             parents=[ROOT_CATEGORY],
+             en=f"Terrestrial survey photographs by swisstopo from the survey area {area}.",
+             de=f"Terrestrische Aufnahmen von swisstopo aus dem Aufnahmegebiet {area}."),
+        dict(name=f"{ROOT_CATEGORY} of {_clean(place)}", sortkey=_clean(place),
+             parents=[f"{ROOT_CATEGORY} by municipality"] + ([muni_cat] if muni_cat else []),
+             en=f"Terrestrial survey photographs by swisstopo showing {where}.",
+             de=f"Terrestrische Aufnahmen von swisstopo, die {where} zeigen."),
+        dict(name=f"{ROOT_CATEGORY} in {year}", sortkey=year,
+             parents=[f"{ROOT_CATEGORY} by year", f"{year} photographs of Switzerland"],
+             en=f"Terrestrial survey photographs by swisstopo taken in {year}.",
+             de=f"Terrestrische Aufnahmen von swisstopo aus dem Jahr {year}."),
+    ]
+
+
+def build(num, collection_category=ROOT_CATEGORY, partner_title=None):
     m = metadata(num)
     j = m["json"]
     layer = layer_attributes(num)
@@ -215,7 +247,6 @@ def build(num, collection_category="Photographs by swisstopo", partner_title=Non
     title = file_title(m["PLACE"], num)
     when = parse_date(m["DATE_STRING"])
     year = when["year"]
-    decade = year[:3] + "0s"
     b = m["bbox"]
     obj_lon, obj_lat = round((b[0] + b[2]) / 2, 5), round((b[1] + b[3]) / 2, 5)
     cam_lat, cam_lon = lv95_to_wgs84(m["E"], m["N"])
@@ -231,25 +262,8 @@ def build(num, collection_category="Photographs by swisstopo", partner_title=Non
     h, w = (min(a, c), max(a, c)) if landscape else (max(a, c), min(a, c))
     fmt = lambda x: int(x) if x.is_integer() else x
 
-    if canton:  # area shown lies in Switzerland
-        wanted = [f"{year} photographs of Switzerland", f"{decade} photographs of Switzerland",
-                  f"{year} in the canton of {canton}", f"Canton of {canton} in the {decade}",
-                  f"Black and white photographs of the canton of {canton}", muni_cat or ""]
-        fallback_bw = "Black and white photographs of Switzerland"
-    else:  # photo looking across the border
-        # no "{year} in {country}" as well: "{year} photographs of {country}" is already inside it
-        wanted = [f"{year} photographs of {country_en}", f"{decade} photographs of {country_en}", "", "",
-                  f"Black and white photographs of {country_en}", muni_cat or ""]
-        fallback_bw = None
-    have = existing_categories([x for x in wanted if x])
-    first = lambda *opts: next((o for o in opts if o and o in have), None)
-    cats = [collection_category,
-            first(wanted[0], wanted[1]),
-            first(wanted[2], wanted[3]),
-            first(wanted[4]) or fallback_bw,
-            first(muni_cat) if muni_cat else None,
-            "Files from swisstopo historic", "Photos uploaded by OKA.wiki"]
-    cats = [c for c in cats if c]
+    plan = category_plan(area, muni, muni_cat, year, country_en)
+    cats = [c["name"] for c in plan] + ["Files from swisstopo historic", "Photos uploaded by OKA.wiki"]
     where_de = f"{muni}, Kanton {canton_de}" if canton else f"{muni}, {country_de}"
     where_en = f"{muni}, canton of {canton}" if canton else f"{muni}, {country_en}"
 
@@ -300,7 +314,7 @@ def build(num, collection_category="Photographs by swisstopo", partner_title=Non
             "de": f"Terrestrische Aufnahme von swisstopo, {label}, {year}",
             "fr": f"Prise de vue terrestre de swisstopo, {label}, {year}",
         })
-    return dict(num=num, title=title, text=text, sdc=sdc, partner=str(j.get("STEREO_PARTNER") or ""),
+    return dict(num=num, title=title, text=text, sdc=sdc, categories=plan, partner=str(j.get("STEREO_PARTNER") or ""),
                 tif_url=f"{DATA}/{fid(num)}/{fid(num)}.tif")
 
 

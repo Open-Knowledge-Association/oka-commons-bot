@@ -14,6 +14,11 @@ photogrammetry (1910s to early 1950s), published under the swisstopo
 (`{{Attribution-Swisstopo}}` on Commons). Uploads go to
 [Category:Terrestrial photographs by swisstopo](https://commons.wikimedia.org/wiki/Category:Terrestrial_photographs_by_swisstopo).
 
+Files are categorised only into subcategories of
+[Category:Terrestrial photographs by swisstopo](https://commons.wikimedia.org/wiki/Category:Terrestrial_photographs_by_swisstopo):
+one per survey area, one per municipality shown (under that municipality's category) and one per year (under
+`<year> photographs of Switzerland`), so general categories get one subcategory link instead of thousands of files.
+
 For each image the bot:
 
 1. reads the swisstopo metadata (STAC API, per-image CSV/JSON, geo.admin.ch layer): date, survey area and
@@ -52,7 +57,8 @@ to this repository.
 | `swisstopo.py` | swisstopo metadata access and the page / structured-data builder |
 | `upload.py` | uploads a prepared batch and writes structured data |
 | `check_thumbs.py`, `link_partners.py`, `make_manifest.py` | post-batch checks, partner links, upload list |
-| `edit_pages.py` | updates earlier uploads by the bot to the current format |
+| `edit_pages.py`, `recategorize.py` | update earlier uploads by the bot to the current format and category scheme |
+| `create_categories.py` | creates the survey-area, municipality and year subcategories a batch needs |
 
 ## Licence
 

@@ -39,7 +39,7 @@ def commons_site():
     try:
         with open(os.path.join(workdir, "user-config.py"), "w", encoding="utf-8") as f:
             f.write(f"family = 'commons'\nmylang = 'commons'\nusernames['commons']['commons'] = {user!r}\n"
-                    "password_file = 'user-password.py'\nput_throttle = 5\nmaxlag = 5\n"
+                    "password_file = 'user-password.py'\nput_throttle = 1\nmaxlag = 5\n"
                     "user_agent_description = 'OKA bot swisstopo uploads; operator User:7804j'\n")
         with open(os.path.join(workdir, "user-password.py"), "w", encoding="utf-8") as f:
             f.write(f"({user!r}, BotPassword({bp_name!r}, {password!r}))\n")

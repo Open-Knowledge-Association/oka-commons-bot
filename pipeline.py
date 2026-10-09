@@ -102,6 +102,8 @@ def main():
         # prepare the next batch while this one uploads
         prep = start_prepare(names[idx + 1], a.size) if idx + 1 < len(names) else None
 
+        if run(["create_categories.py", f"{name}.json"], f"{name}.log") != 0:
+            stop(f"{name}: creating categories failed (see {name}.log)")
         log(f"{name}: uploading with {a.shards} processes")
         procs = [subprocess.Popen([PY, "-u", "upload.py", f"{name}.json", "--shard", f"{i}/{a.shards}",
                                    "--edit-interval", str(a.edit_interval)],

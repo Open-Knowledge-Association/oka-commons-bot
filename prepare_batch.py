@@ -51,7 +51,10 @@ def dry_run(title, text):
                 raise
             time.sleep(min(5 * 3 ** attempt, 120))
     cats = p["categories"]
-    problems = [c["*"] for c in cats if "missing" in c or re.search("rroneous|error|without|lacking|invalid", c["*"], re.I)]
+    # our own subcategories are created just before the batch uploads (create_categories.py)
+    ours = s.ROOT_CATEGORY.replace(" ", "_")
+    problems = [c["*"] for c in cats if ("missing" in c and not c["*"].startswith(ours))
+                or re.search("rroneous|error|without|lacking|invalid", c["*"], re.I)]
     if re.search(r'class="(?:error|scribunto-error)', p["text"]["*"]):
         problems.append("template error")
     return problems

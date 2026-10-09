@@ -16,3 +16,5 @@
 !/make_manifest.py
 !/edit_pages.py
 !/uploads.csv
+!/recategorize.py
+!/create_categories.py
