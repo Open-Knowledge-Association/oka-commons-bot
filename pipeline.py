@@ -19,6 +19,7 @@ import sys
 import time
 
 MAX_SET_ASIDE = 0.05
+MAX_DATA_ERRORS = 0.20  # heading mismatches (errors in swisstopo's records)
 PY = sys.executable
 
 
@@ -95,9 +96,15 @@ def main():
                 stop(f"{name}: preparation failed (see {name}.log)")
         pages = json.load(open(f"{name}.json", encoding="utf-8"))
         held = [p["num"] for p in pages if p.get("already_on_commons") or not p.get("verified") or p.get("problems")]
-        log(f"{name}: prepared {len(pages)}, set aside {len(held)}")
-        if len(pages) and len(held) / len(pages) > MAX_SET_ASIDE:
-            stop(f"{name}: {len(held)} of {len(pages)} set aside, above {MAX_SET_ASIDE:.0%}; review {name}.json")
+        # data errors in single records (heading vs photographed area) are set aside safely and counted apart;
+        # the 5% limit is for failures that point at a problem in the bot itself
+        data = [p["num"] for p in pages if p.get("problems") and all(x.startswith("heading ") for x in p["problems"])]
+        other = len(held) - len(data)
+        log(f"{name}: prepared {len(pages)}, set aside {len(held)} ({len(data)} heading mismatches)")
+        if len(pages) and other / len(pages) > MAX_SET_ASIDE:
+            stop(f"{name}: {other} of {len(pages)} set aside, above {MAX_SET_ASIDE:.0%}; review {name}.json")
+        if len(pages) and len(data) / len(pages) > MAX_DATA_ERRORS:
+            stop(f"{name}: {len(data)} of {len(pages)} heading mismatches, above {MAX_DATA_ERRORS:.0%}; review {name}.json")
 
         # prepare the next batch while this one uploads
         prep = start_prepare(names[idx + 1], a.size) if idx + 1 < len(names) else None
