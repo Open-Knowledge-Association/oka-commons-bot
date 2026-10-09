@@ -2,10 +2,10 @@
 import datetime
 import json
 import re
-import subprocess
 import threading
 import time
-import urllib.parse
+
+import requests
 
 UA = "OKA-bot/0.1 (https://commons.wikimedia.org/wiki/User:OKA_bot; jz@oka.wiki)"
 COLLECTION = "ch.swisstopo.lubis-terrestrische_aufnahmen"
@@ -26,24 +26,45 @@ CANTONS = {
 }
 
 
-def http(url, params=None, binary=False):
-    if params:
-        url += "?" + urllib.parse.urlencode(params)
-    for attempt in range(4):  # curl retries transient HTTP errors itself; this also covers failed connections
+_SESSION = requests.Session()
+_SESSION.headers["User-Agent"] = UA
+
+
+def _request(method, url, **kwargs):
+    """HTTP request with retries (failed connections, timeouts, HTTP errors): 5 s, 15 s, 45 s."""
+    for attempt in range(4):
         try:
-            out = subprocess.run(["curl", "-sfL", "--retry", "3", "-A", UA, url], capture_output=True,
-                                 check=True).stdout
-            break
-        except subprocess.CalledProcessError:
+            r = _SESSION.request(method, url, timeout=300, **kwargs)
+            r.raise_for_status()
+            return r
+        except requests.RequestException:
             if attempt == 3:
                 raise
             time.sleep(5 * 3 ** attempt)
+
+
+def http(url, params=None, binary=False):
+    out = _request("GET", url, params=params).content
     if binary:
         return out
     try:
         return out.decode("utf-8-sig")
     except UnicodeDecodeError:
         return out.decode("latin-1")
+
+
+def post(url, data):
+    """POST form data; returns the response body (bytes)."""
+    return _request("POST", url, data=data).content
+
+
+def status(url):
+    """(HTTP status, content type, body length) of a GET, without raising on HTTP errors."""
+    try:
+        r = _SESSION.get(url, timeout=300)
+        return r.status_code, r.headers.get("content-type", ""), len(r.content)
+    except requests.RequestException:
+        return 0, "", 0
 
 
 def fid(num):
@@ -137,7 +158,7 @@ def commons_query(params, attempts=6):
             if "query" in r or ("error" not in r and "batchcomplete" in r):
                 return r
             reason = r.get("error", {}).get("code", "no query result")
-        except (subprocess.CalledProcessError, ValueError) as e:
+        except (requests.RequestException, ValueError) as e:
             reason = type(e).__name__
         if attempt == attempts - 1:
             raise RuntimeError(f"Commons query failed after {attempts} attempts ({reason}): {params}")

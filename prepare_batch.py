@@ -13,7 +13,6 @@ import json
 import math
 import os
 import re
-import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -39,14 +38,11 @@ def collection_order():
 
 def dry_run(title, text):
     for attempt in range(6):  # the parser occasionally answers with an empty or error response
-        out = subprocess.run(["curl", "-s", "--retry", "3", "-A", s.UA, s.COMMONS_API, "--data-urlencode", "action=parse",
-                              "--data-urlencode", "format=json", "--data-urlencode", "prop=categories|text",
-                              "--data-urlencode", "title=" + title, "--data-urlencode", "text=" + text],
-                             capture_output=True).stdout
         try:
+            out = s.post(s.COMMONS_API, dict(action="parse", format="json", prop="categories|text", title=title, text=text))
             p = json.loads(out)["parse"]
             break
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, s.requests.RequestException):
             if attempt == 5:
                 raise
             time.sleep(min(5 * 3 ** attempt, 120))

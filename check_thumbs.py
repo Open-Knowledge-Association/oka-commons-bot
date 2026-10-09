@@ -3,7 +3,6 @@
 Usage: python check_thumbs.py batch.json      Prints one line per failure and a summary.
 """
 import json
-import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -28,9 +27,8 @@ def _renders(title, width):
     if "thumburl" not in info:
         return False
     for _ in range(3):  # thumbnails render on first request; give the renderer a moment
-        out = subprocess.run(["curl", "-s", "-o", "NUL", "-w", "%{http_code} %{content_type} %{size_download}",
-                              "-A", s.UA, info["thumburl"]], capture_output=True, text=True).stdout.split()
-        if len(out) == 3 and out[0] == "200" and out[1].startswith("image/") and int(out[2]) > 5000:
+        code, ctype, size = s.status(info["thumburl"])
+        if code == 200 and ctype.startswith("image/") and size > 5000:
             return True
         time.sleep(5)
     return False
