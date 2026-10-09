@@ -188,7 +188,18 @@ def parse_date(text):
         datetime.date.fromisoformat(start), datetime.date.fromisoformat(end)
         return dict(wikitext=f"{{{{other date|between|{start}|{end}}}}}", time=f"{y}-{m2 if m1 in (None, m2) else '00'}-00",
                     precision=10 if m1 in (None, m2) else 9, year=y, earliest=start, latest=end)
+    if m := re.fullmatch(r"([A-Za-zäÄ]+)\.? (\d{4})", text):
+        month = MONTHS.get(m[1].lower())
+        if month:
+            return dict(wikitext=f"{m[2]}-{month:02d}", time=f"{m[2]}-{month:02d}-00", precision=10, year=m[2])
     raise ValueError(f"unrecognised date format {text!r}")
+
+
+MONTHS = {name: i for i, names in enumerate([
+    ("january", "januar", "jan"), ("february", "februar", "feb"), ("march", "märz", "mar", "mär"), ("april", "apr"),
+    ("may", "mai"), ("june", "juni", "jun"), ("july", "juli", "jul"), ("august", "aug"),
+    ("september", "sept", "sep"), ("october", "oktober", "oct", "okt"), ("november", "nov"),
+    ("december", "dezember", "dec", "dez")], start=1) for name in names}
 
 
 def commons_title(num):
@@ -253,8 +264,14 @@ def build(num, collection_category=ROOT_CATEGORY, partner_title=None):
     shown = place_of(obj_lon, obj_lat)
     muni, muni_qid, muni_cat, canton, canton_de = (shown[k] for k in ("muni", "qid", "cat", "canton", "canton_de"))
     country_en, country_de = COUNTRIES[shown["country"]]
-    k = float(m["KAPPA"])
-    heading = int(k) if k.is_integer() else k
+    try:
+        k = float(m["KAPPA"])
+        heading = int(k) if k.is_integer() else k
+    except ValueError:  # no orientation recorded ("N/A"): no heading on the page or in structured data
+        heading = None
+    facing_de = f" Aufgenommen Richtung {heading}°;" if heading is not None else ""
+    facing_en = f" Taken facing {heading}°;" if heading is not None else ""
+    shown_de, shown_en = ("abgebildetes Gebiet", "area shown") if heading is not None else ("Abgebildetes Gebiet", "Area shown")
 
     # plate format: the longer side is the width for landscape scans
     a, c = (float(x) for x in m["DIMENSION"].split(" x "))
@@ -289,8 +306,8 @@ def build(num, collection_category=ROOT_CATEGORY, partner_title=None):
 {{{{Photograph
  |photographer      = Q685592
  |title             = {{{{Title|{label}|lang=de}}}}
- |description       = {{{{de|1=Terrestrische photogrammetrische Aufnahme, Aufnahmegebiet {area}{st_de}. Aufgenommen Richtung {heading}°; abgebildetes Gebiet: {where_de}.}}}}
-                      {{{{en|1=Terrestrial photogrammetric survey photograph, {area} survey{st_en}. Taken facing {heading}°; area shown: {where_en}.}}}}
+ |description       = {{{{de|1=Terrestrische photogrammetrische Aufnahme, Aufnahmegebiet {area}{st_de}.{facing_de} {shown_de}: {where_de}.}}}}
+                      {{{{en|1=Terrestrial photogrammetric survey photograph, {area} survey{st_en}.{facing_en} {shown_en}: {where_en}.}}}}
  |depicted place    = {place}
  |date              = {when['wikitext']}
  |medium            = {{{{Technique|photograph|adj=black and white|on=glass}}}}
@@ -301,7 +318,7 @@ def build(num, collection_category=ROOT_CATEGORY, partner_title=None):
  |permission        = {{{{Attribution-Swisstopo}}}}
  |other_fields      = {other}
 }}}}
-{{{{Location|{cam_lat}|{cam_lon}|region:CH_heading:{heading}}}}}
+{{{{Location|{cam_lat}|{cam_lon}|region:CH{'_heading:' + str(heading) if heading is not None else ''}}}}}
 {{{{Object location|{obj_lat}|{obj_lon}|region:{shown['country'].upper()}}}}}
 
 """ + "\n".join(f"[[Category:{c}]]" for c in cats) + "\n"

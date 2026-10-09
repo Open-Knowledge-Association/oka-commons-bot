@@ -78,6 +78,8 @@ def heading_problems(p):
     cam, area = claims["P1259"], claims["P9149"]
     lat1, lon1 = cam["mainsnak"]["datavalue"]["value"]["latitude"], cam["mainsnak"]["datavalue"]["value"]["longitude"]
     lat2, lon2 = area["mainsnak"]["datavalue"]["value"]["latitude"], area["mainsnak"]["datavalue"]["value"]["longitude"]
+    if "P7787" not in cam.get("qualifiers", {}):
+        return []  # no heading recorded: nothing to check
     heading = float(cam["qualifiers"]["P7787"][0]["datavalue"]["value"]["amount"])
     p1, p2, dl = math.radians(lat1), math.radians(lat2), math.radians(lon2 - lon1)
     bearing = math.degrees(math.atan2(math.sin(dl) * math.cos(p2),
