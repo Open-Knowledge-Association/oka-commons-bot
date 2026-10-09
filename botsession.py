@@ -55,7 +55,7 @@ def commons_site():
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-TRANSIENT_ERRORS = ("ShellboxError", "backend-fail")  # Commons storage/processing hiccups
+TRANSIENT_ERRORS = ("ShellboxError", "backend-fail", "JobQueueError")  # Commons storage/processing hiccups
 TRANSIENT_RETRIES = 2
 
 
@@ -84,7 +84,7 @@ def upload_with_retry(site, title, filename, expected_sha1, **kwargs):
         except Exception as e:  # noqa: BLE001 - anything may hide an upload that did reach Commons
             code = getattr(e, "code", type(e).__name__)
             transient = any(t in code for t in TRANSIENT_ERRORS) or isinstance(
-                e, (pywikibot.exceptions.ServerError, getattr(pywikibot.exceptions, "ApiTimeoutError", pywikibot.exceptions.TimeoutError)))
+                e, (pywikibot.exceptions.ServerError, pywikibot.exceptions.ApiTimeoutError))
             time.sleep(60 if transient else 10)
             if stored():  # the failed request stored our exact file after all
                 print(f"{title}: {code}, but the file reached Commons intact", flush=True)
