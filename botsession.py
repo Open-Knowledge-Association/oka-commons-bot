@@ -43,6 +43,7 @@ def commons_site():
                     "user_agent_description = 'OKA bot swisstopo uploads; operator User:7804j'\n")
         with open(os.path.join(workdir, "user-password.py"), "w", encoding="utf-8") as f:
             f.write(f"({user!r}, BotPassword({bp_name!r}, {password!r}))\n")
+        os.chmod(os.path.join(workdir, "user-password.py"), 0o600)
         os.environ["PYWIKIBOT_DIR"] = workdir
         import pywikibot
 
