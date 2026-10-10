@@ -82,7 +82,7 @@ def build_aerial(kind, item):
     where_en = f"{muni}, canton of {shown['canton']}" if shown["canton"] else f"{muni}, {s.COUNTRIES[shown['country']][0]}"
     where_de = f"{muni}, Kanton {shown['canton_de']}" if shown["canton"] else f"{muni}, {s.COUNTRIES[shown['country']][1]}"
     place = m.get("PLACE") if m.get("PLACE") not in (None, "", "N/A") else None
-    title = f"File:{s._clean(muni)} - Swisstopo {cfg['label']} photograph {inv}.tif"
+    title = f"File:{s._clean_filename(muni)} - Swisstopo {cfg['label']} photograph {inv}.tif"
     label = place or f"{muni} ({year})"
     lang = LANG.get(shown.get("code"), "de")
     fl = _num(m.get("FOCAL_LENGTH"))
@@ -147,7 +147,7 @@ def build_technical(item):
     h, w = (_num(x) for x in fmt.split(" x ")) if " x " in fmt else (None, None)
     negative = m.get("POLARITY") == "negative" and m.get("MATERIAL") == "Glass"
     url = f"https://data.geo.admin.ch/browser/index.html#/collections/{TECH['collection']}/items/{item['id']}"
-    title = f"File:{s._clean(name)} - Swisstopo technical image {sig}.tif"
+    title = f"File:{s._clean_filename(name)} - Swisstopo technical image {sig}.tif"
     plans = [dict(name=TECH["root"], sortkey=None, parents=TECH["parents"],
                   en="Technical photographs (survey points, instruments, work) by the Swiss Federal Office of Topography (swisstopo).",
                   de="Technische Aufnahmen (Vermessungspunkte, Instrumente, Arbeiten) des Bundesamts für Landestopografie (swisstopo).")] + \

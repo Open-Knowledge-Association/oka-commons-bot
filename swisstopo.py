@@ -184,9 +184,15 @@ def on_commons(num, sha1):
 
 def file_title(place, num):
     """Commons file name; characters not allowed in page titles are dropped (only from the name)."""
-    clean = lambda x: re.sub(r"\s+", " ", re.sub(r"[\[\]#<>|{}]", "", x)).strip()
-    area, _, station = (clean(p) for p in place.partition("|"))
+    area, _, station = (_clean_filename(p) for p in place.partition("|"))
     return f"File:{area} - {station} - Swisstopo {num}.tif" if station else f"File:{area} - Swisstopo {num}.tif"
+
+
+def _clean_filename(x):
+    """File-name-safe text: drop [ ] # < > | { }, and turn slash, colon and backslash (not allowed in file
+    names) into hyphens."""
+    x = re.sub(r"\s*[/:\\]\s*", "-", x)
+    return re.sub(r"\s+", " ", re.sub(r"[\[\]#<>|{}]", "", x)).strip()
 
 
 def parse_date(text):
