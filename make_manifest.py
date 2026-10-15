@@ -48,7 +48,11 @@ def main():
         area, _, station = (p.strip() for p in m["PLACE"].partition("|"))
         cam_lat, cam_lon = s.lv95_to_wgs84(m["E"], m["N"])
         c_lon, c_lat = round((b[0] + b[2]) / 2, 5), round((b[1] + b[3]) / 2, 5)
-        place = s.place_of(c_lon, c_lat)
+        try:
+            place = s.place_of(c_lon, c_lat)
+        except Exception as e:  # e.g. Nominatim refusing Toolforge's shared address (429): listed with a later update
+            print(f"not listed yet: {img['title']}: {type(e).__name__}: {e}", flush=True)
+            return None
         return dict(
             commons_title=img["title"], mediainfo_id=ids.get(img["title"], ""), uploaded=img["timestamp"],
             inventory_number=num, date=j.get("DATE_FULL", ""), survey_area=area, station=station,
@@ -66,9 +70,11 @@ def main():
         w = csv.DictWriter(f, FIELDS)
         w.writeheader()
         for img in images:  # Commons upload order
-            w.writerow(known.get(img["title"]) or rows[img["title"]])
+            if known.get(img["title"]) or rows[img["title"]]:
+                w.writerow(known.get(img["title"]) or rows[img["title"]])
     os.replace(tmp, out)
-    print(f"{len(images)} files listed ({len(new)} new)", flush=True)
+    later = sum(1 for r in rows.values() if r is None)
+    print(f"{len(images) - later} files listed ({len(new) - later} new, {later} left for a later update)", flush=True)
 
 
 FIELDS = ["commons_title", "mediainfo_id", "uploaded", "inventory_number", "date", "survey_area", "station",
