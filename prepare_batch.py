@@ -24,6 +24,16 @@ from verify_strip import verify
 WORK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "work")
 WORKERS = 8  # images prepared in parallel (network-bound)
 
+# glibc raises its mmap threshold after the first large free, so later 15-20 MB image buffers come from
+# the workers' arenas and are not handed back: on Toolforge the process grew by about 15 MB per image
+# and was killed at image 153 of 200 under a 2 GB limit (2026-10-15). A fixed 1 MB threshold keeps
+# every large buffer in its own mapping, returned to the system when freed.
+try:
+    import ctypes
+    ctypes.CDLL("libc.so.6").mallopt(-3, 1 << 20)  # M_MMAP_THRESHOLD
+except OSError:
+    pass  # not glibc (the Windows PC): nothing to tune
+
 
 def collection_order():
     url = f"https://data.geo.admin.ch/api/stac/v0.9/collections/{s.COLLECTION}/items"
