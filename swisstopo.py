@@ -198,7 +198,7 @@ def _clean_filename(x):
 def parse_date(text):
     """swisstopo DATE_STRING -> Commons date wikitext and Wikidata time values.
 
-    Handles day (11.08.1915), year only (1924) and day ranges (20.03.-13.04.1922, 05.-07.08.1919).
+    Handles day (11.08.1915), year only (1924) and day ranges (20.03.-13.04.1922, 05.-07.08.1919, 06./07.07.1936).
     Anything else raises ValueError, so the image is set aside instead of guessed.
     """
     text = text.strip()
@@ -209,10 +209,12 @@ def parse_date(text):
         return dict(wikitext=day, time=day, precision=11, year=m[3])
     if m := re.fullmatch(r"(\d{4})", text):
         return dict(wikitext=text, time=f"{text}-00-00", precision=9, year=text)
-    if m := re.fullmatch(r"(\d{2})\.(?:(\d{2})\.)?-(\d{2})\.(\d{2})\.(\d{4})", text):
+    if m := re.fullmatch(r"(\d{2})\.(?:(\d{2})\.)?\s?[-/]\s?(\d{2})\.(\d{2})\.(\d{4})", text):   # '-' or '/' between days
         d1, m1, d2, m2, y = m.groups()
         start, end = iso(d1, m1 or m2, y), iso(d2, m2, y)
         datetime.date.fromisoformat(start), datetime.date.fromisoformat(end)
+        if start > end:                                   # '31./01.07.1936': which month is the 31st in?
+            raise ValueError(f"unrecognised date format {text!r}")
         return dict(wikitext=f"{{{{other date|between|{start}|{end}}}}}", time=f"{y}-{m2 if m1 in (None, m2) else '00'}-00",
                     precision=10 if m1 in (None, m2) else 9, year=y, earliest=start, latest=end)
     if m := re.fullmatch(r"([A-Za-zäÄ]+)\.? (\d{4})", text):
