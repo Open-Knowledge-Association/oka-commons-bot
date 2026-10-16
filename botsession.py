@@ -57,7 +57,15 @@ def commons_site():
 
 
 TRANSIENT_ERRORS = ("ShellboxError", "backend-fail", "JobQueueError")  # Commons storage/processing hiccups
+SESSION_ERRORS = ("badtoken", "assertuserfailed", "assertbotfailed")    # the login session expired
 TRANSIENT_RETRIES = 2
+
+
+def renew_session(site):
+    """Log in again with fresh tokens after the session expired (batch185 on 15 October: 'Logged in as <IP>
+    instead of OKA bot', then 'Invalid CSRF token' ended an upload process)."""
+    site.tokens.clear()
+    site.login()
 
 
 def upload_with_retry(site, title, filename, expected_sha1, **kwargs):
@@ -84,9 +92,12 @@ def upload_with_retry(site, title, filename, expected_sha1, **kwargs):
             break
         except Exception as e:  # noqa: BLE001 - anything may hide an upload that did reach Commons
             code = getattr(e, "code", type(e).__name__)
-            transient = any(t in code for t in TRANSIENT_ERRORS) or isinstance(
+            session = any(t in code for t in SESSION_ERRORS)
+            transient = session or any(t in code for t in TRANSIENT_ERRORS) or isinstance(
                 e, (pywikibot.exceptions.ServerError, pywikibot.exceptions.ApiTimeoutError))
             time.sleep(60 if transient else 10)
+            if session:
+                renew_session(site)
             if stored():  # the failed request stored our exact file after all
                 print(f"{title}: {code}, but the file reached Commons intact", flush=True)
                 return True
@@ -115,8 +126,15 @@ def write_structured_data(site, title, sdc, summary):
     if not claims and not labels:
         return []
     data = {"claims": claims, "labels": labels}
-    site.simple_request(action="wbeditentity", id=mid, data=json.dumps(data), summary=summary, bot=1,
-                        token=site.tokens["csrf"]).submit()
+    try:
+        site.simple_request(action="wbeditentity", id=mid, data=json.dumps(data), summary=summary, bot=1,
+                            token=site.tokens["csrf"]).submit()
+    except pywikibot.exceptions.APIError as e:
+        if not any(t in e.code for t in SESSION_ERRORS):
+            raise
+        renew_session(site)                  # the session expired: once more with a fresh token
+        site.simple_request(action="wbeditentity", id=mid, data=json.dumps(data), summary=summary, bot=1,
+                            token=site.tokens["csrf"]).submit()
     after = site.simple_request(action="wbgetentities", ids=mid).submit()["entities"][mid]
     missing = {c["mainsnak"]["property"] for c in claims} - set((after.get("statements") or {}).keys())
     if missing:
