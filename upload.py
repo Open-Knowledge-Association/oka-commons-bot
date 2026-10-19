@@ -10,7 +10,10 @@ into the batch file once all shards have finished (done automatically with one s
 `--edit-interval` is the minimum number of seconds between two edits of one process
 (n processes at 1 s each give at most n edits per second overall).
 
-Usage: python upload.py batch.json [--shard 0/1] [--edit-interval 1] [--delay SECONDS]
+Files over 95 MiB go up in 20 MiB chunks. `--delete-uploaded` removes each local file once it is on
+Commons with its structured data (keeps the disk use of large batches down).
+
+Usage: python upload.py batch.json [--shard 0/1] [--edit-interval 1] [--delay SECONDS] [--delete-uploaded]
        python upload.py batch.json --merge
 """
 import argparse
@@ -24,6 +27,8 @@ import time
 from botsession import commons_site, upload_with_retry, write_structured_data
 
 DEFERRED_PROPERTIES = set()  # properties held back for a later Wikidata linking step (none for now)
+CHUNKED_ABOVE = 95 * 2 ** 20  # larger files go up in 20 MiB chunks
+REQUEST = "Commons:Bots/Requests/OKA bot"  # approval a page cites unless it names its own ("request")
 
 
 def progress_files(batch):
@@ -71,6 +76,7 @@ def main():
     ap.add_argument("--edit-interval", type=float, default=1.0)
     ap.add_argument("--delay", type=float, default=0.0, help="extra pause after each file")
     ap.add_argument("--merge", action="store_true")
+    ap.add_argument("--delete-uploaded", action="store_true", help="delete each local file once uploaded with structured data")
     args = ap.parse_args()
     if args.merge:
         merge(args.batch)
@@ -112,16 +118,20 @@ def main():
                             sys.exit(f"{p['title']} already exists with other content; stopping")
                     if not p.get("uploaded"):
                         pace()
+                        extra = {"chunk_size": 20 * 2 ** 20} if os.path.getsize(p["stripped"]) > CHUNKED_ABOVE else {}
+                        comment = p.get("comment") or f"Upload swisstopo terrestrial image {p['num']} ([[{REQUEST}]])"
                         if not upload_with_retry(site, p["title"], p["stripped"], sha, text=p["text"], ignore_warnings=False,
-                                                 comment=f"Upload swisstopo terrestrial image {p['num']} ([[Commons:Bots/Requests/OKA bot]])"):
+                                                 comment=comment, **extra):
                             sys.exit(f"{p['num']}: upload warning, failure or SHA-1 mismatch; stopping")
                         record(p, uploaded=True)
                 sdc = {**p["sdc"], "claims": [c for c in p["sdc"]["claims"]
                                               if c["mainsnak"]["property"] not in DEFERRED_PROPERTIES]}
                 pace()
                 added = write_structured_data(site, p["title"], sdc,
-                                              "Structured data from swisstopo metadata ([[Commons:Bots/Requests/OKA bot]])")
+                                              f"Structured data from swisstopo metadata ([[{p.get('request', REQUEST)}]])")
                 record(p, sdc_done=True)
+                if args.delete_uploaded and os.path.exists(p["stripped"]):
+                    os.remove(p["stripped"])
                 print(f"uploaded and verified, structured data: {len(added)} added | {p['title']}", flush=True)
                 if args.delay:
                     time.sleep(args.delay)

@@ -4,7 +4,9 @@ import numpy as np
 import tifffile
 
 
-def verify(src, dst):
+def verify(src, dst, decode_source=True):
+    """decode_source=False decodes only the copy: its tags and compressed tiles were compared byte for byte
+    above, so equal pixels follow, and one decode of a large scan (17,000 px RGB: 860 MB) fits in memory."""
     with tifffile.TiffFile(src) as a, tifffile.TiffFile(dst) as b:
         assert len(b.pages) == 1, "more than one page"
         pa, pb = a.pages[0], b.pages[0]
@@ -17,7 +19,10 @@ def verify(src, dst):
         for (oa, ca), (ob, cb) in zip(zip(pa.dataoffsets, pa.databytecounts), zip(pb.dataoffsets, pb.databytecounts)):
             fa.seek(oa); fb.seek(ob)
             assert ca == cb and fa.read(ca) == fb.read(cb), "compressed tile differs"
-        assert np.array_equal(pa.asarray(), pb.asarray()), "decoded pixels differ"
+        if decode_source:
+            assert np.array_equal(pa.asarray(), pb.asarray()), "decoded pixels differ"
+        else:
+            assert pb.asarray().shape == pa.shape, "decoded copy has another size"
     return True
 
 

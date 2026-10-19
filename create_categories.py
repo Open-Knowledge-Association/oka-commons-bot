@@ -41,7 +41,7 @@ def page_text(plan, have):
     return "\n".join(lines) + "\n"
 
 
-def ensure(site, plans):
+def ensure(site, plans, request="Commons:Bots/Requests/OKA bot"):
     """Create every category in plans that does not exist yet (plus the collection's "by municipality" and
     "by year" overview categories); returns the names created."""
     import pywikibot
@@ -69,8 +69,7 @@ def ensure(site, plans):
             have.add(plan["name"])
             continue
         page.text = page_text(plan, have)
-        page.save(summary="Category for swisstopo photographs uploaded by OKA bot "
-                          "([[Commons:Bots/Requests/OKA bot]])", bot=True, quiet=True)
+        page.save(summary=f"Category for swisstopo photographs uploaded by OKA bot ([[{request}]])", bot=True, quiet=True)
         if not pywikibot.Category(site, plan["name"]).exists():
             raise SystemExit(f"{plan['name']}: not created; stopping")
         have.add(plan["name"])
@@ -82,9 +81,13 @@ def ensure(site, plans):
 
 def main():
     pages = json.load(open(sys.argv[1], encoding="utf-8"))
-    plans = [c for p in pages if p.get("categories") and not p.get("problems") for c in p["categories"]]
+    # only the categories of files that will be uploaded (not of duplicates or files set aside)
+    ready = [p for p in pages if p.get("categories") and not p.get("problems") and p.get("verified", True)
+             and not p.get("already_on_commons")]
+    plans = [c for p in ready for c in p["categories"]]
+    request = next((p["request"] for p in ready if p.get("request")), "Commons:Bots/Requests/OKA bot")
     with commons_site() as site:
-        created = ensure(site, plans)
+        created = ensure(site, plans, request)
     print(f"{len(created)} categories created", flush=True)
 
 

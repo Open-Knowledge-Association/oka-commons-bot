@@ -57,6 +57,16 @@ def _plans(root, muni, muni_cat, year, en, de):
     ]
 
 
+def _wt(x):
+    """Free text from swisstopo made safe inside a template parameter (pipes, braces, links, signatures, tags)."""
+    if x is None:
+        return None
+    for a, b in (("&", "&amp;"), ("|", "&#124;"), ("{", "&#123;"), ("}", "&#125;"), ("[[", "&#91;["), ("]]", "]&#93;"),
+                 ("~~~", "&#126;~~"), ("<", "&lt;"), ("__", "_&#95;")):
+        x = x.replace(a, b)
+    return x
+
+
 def _fields(pairs):
     return "\n                      ".join(f"{{{{Information field|name={k}|value={v}}}}}" for k, v in pairs if v)
 
@@ -90,12 +100,12 @@ def build_aerial(kind, item):
     alt = _num(m.get("Z"))
     asset = lambda suffix: next((h for n, h in item["assets"].items() if n.endswith(suffix)), None)
     calibration = next((h for n, h in item["assets"].items() if "calibration" in n), None)
-    fields = [("Series", m.get("SERIES") if m.get("SERIES") not in ("", "N/A") else None),
-              ("Place (swisstopo)", place),
-              ("Camera", m.get("CAMERA") if m.get("CAMERA") not in ("", "N/A") else None),
+    fields = [("Series", _wt(m.get("SERIES")) if m.get("SERIES") not in ("", "N/A") else None),
+              ("Place (swisstopo)", _wt(place)),
+              ("Camera", _wt(m.get("CAMERA")) if m.get("CAMERA") not in ("", "N/A") else None),
               ("Focal length", f"{fl} mm" if fl and fl >= 50 else None),   # smaller values are not millimetres
               ("Flight altitude", f"{alt} m" if alt else None),
-              ("Film", m.get("FILM_TYPE") if m.get("FILM_TYPE") not in ("", "N/A") else None),
+              ("Film", _wt(m.get("FILM_TYPE")) if m.get("FILM_TYPE") not in ("", "N/A") else None),
               ("Stereo partner", f"swisstopo inventory number {m['STEREO_PARTNER']}"
                if m.get("STEREO_PARTNER") not in (None, "", "N/A") else None),
               ("Camera calibration", f"[{calibration} swisstopo calibration report (PDF)]" if calibration else None)]
@@ -109,9 +119,9 @@ def build_aerial(kind, item):
     text = f"""=={{{{int:filedesc}}}}==
 {{{{Photograph
  |photographer      = Q685592
- |title             = {{{{Title|{label}|lang={lang}}}}}
- |description       = {{{{en|1={cfg['en']} ({view}) by swisstopo{', ' + place if place else ''}. Area shown: {where_en}.}}}}
-                      {{{{de|1={cfg['de']} ({'Schrägaufnahme' if view == 'oblique' else 'Senkrechtaufnahme'}) von swisstopo{', ' + place if place else ''}. Abgebildetes Gebiet: {where_de}.}}}}
+ |title             = {{{{Title|{_wt(label)}|lang={lang}}}}}
+ |description       = {{{{en|1={cfg['en']} ({view}) by swisstopo{', ' + _wt(place) if place else ''}. Area shown: {where_en}.}}}}
+                      {{{{de|1={cfg['de']} ({'Schrägaufnahme' if view == 'oblique' else 'Senkrechtaufnahme'}) von swisstopo{', ' + _wt(place) if place else ''}. Abgebildetes Gebiet: {where_de}.}}}}
  |depicted place    = {muni_qid or where_en}
  |date              = {when['wikitext']}
  |medium            = {FILM_MEDIUM.get(m.get('FILM_TYPE'), '')}
@@ -135,13 +145,31 @@ def build_aerial(kind, item):
     return dict(num=inv, title=title, text=text, sdc=sdc, categories=plans, tif_url=asset("_2056.tif") or asset(".tif"))
 
 
+PLACEHOLDERS = {(2600969, 1197427), (2499999, 1100001)}   # swisstopo's site at Wabern; a round corner value
+
+
+def placeholder_position(e, n):
+    """True if the record's position is a stand-in: missing, or exactly one of PLACEHOLDERS (swisstopo's site is
+    given for about half the technical images, from Ticino border stones to aircraft; real photos of the site
+    have varying positions around it)."""
+    try:
+        e, n = float(e), float(n)
+    except (TypeError, ValueError):
+        return True
+    return (e, n) in PLACEHOLDERS
+
+
 def build_technical(item):
     m = item["meta"]
     sig, name = m["ORIGINAL_SIGNATURE"], m["IMAGE_TITLE"]
-    when = s.parse_date(m["DATE_STRING"])
-    lat, lon = s.lv95_to_wgs84(m["EASTING"], m["NORTHING"])
-    shown = s.place_of(lon, lat)
-    muni, muni_qid, muni_cat = shown["muni"], shown["qid"], shown["cat"]
+    when = None if m["DATE_STRING"] == "N/A" else s.parse_date(m["DATE_STRING"])   # N/A: not recorded
+    located = not placeholder_position(m["EASTING"], m["NORTHING"])
+    if located:
+        lat, lon = s.lv95_to_wgs84(m["EASTING"], m["NORTHING"])
+        shown = s.place_of(lon, lat)
+        muni, muni_qid, muni_cat = shown["muni"], shown["qid"], shown["cat"]
+    else:                                    # no real position recorded: no place, never swisstopo's own address
+        muni = muni_qid = muni_cat = shown = None
     cat_en, depicts = TECH_CATEGORIES.get(m["TNA_CATEGORY"], (None, None))
     fmt = m.get("MEDIUM_FORMAT", "")
     h, w = (_num(x) for x in fmt.split(" x ")) if " x " in fmt else (None, None)
@@ -151,20 +179,23 @@ def build_technical(item):
     plans = [dict(name=TECH["root"], sortkey=None, parents=TECH["parents"],
                   en="Technical photographs (survey points, instruments, work) by the Swiss Federal Office of Topography (swisstopo).",
                   de="Technische Aufnahmen (Vermessungspunkte, Instrumente, Arbeiten) des Bundesamts für Landestopografie (swisstopo).")] + \
-        _plans(TECH["root"], muni, muni_cat, when["year"], "Technical images", "Technische Aufnahmen")
-    cats = [p["name"] for p in plans[1:]] + ["Photos uploaded by OKA.wiki"]
-    fields = [("Collection (swisstopo)", m.get("TNA_COLLECTION")), ("Category (swisstopo)", m.get("TNA_CATEGORY")),
-              ("Original ID", m.get("ORIGINAL_ID")),
-              ("Author", m.get("AUTHOR") if m.get("AUTHOR") not in ("", "N/A") else None)]
-    en_desc = f"Technical photograph by swisstopo: {name}" + (f" ({cat_en})" if cat_en else "") + f", {muni}."
+        [q for q, keep in zip(_plans(TECH["root"], muni or "", muni_cat, when["year"] if when else "", "Technical images",
+                                     "Technische Aufnahmen"), (located, bool(when))) if keep]   # place, year when known
+    cats = [p["name"] for p in plans[1:]] or [TECH["root"]]
+    cats.append("Photos uploaded by OKA.wiki")
+    portrait = m.get("TNA_CATEGORY", "").startswith("Portrait") or m.get("TNA_COLLECTION") == "Personalfotos"
+    fields = [("Collection (swisstopo)", _wt(m.get("TNA_COLLECTION"))), ("Category (swisstopo)", _wt(m.get("TNA_CATEGORY"))),
+              ("Original ID", _wt(m.get("ORIGINAL_ID"))),
+              ("Author", _wt(m.get("AUTHOR")) if m.get("AUTHOR") not in ("", "N/A") else None)]
+    en_desc = f"Technical photograph by swisstopo: {name}" + (f" ({cat_en})" if cat_en else "") + (f", {muni}." if muni else ".")
     text = f"""=={{{{int:filedesc}}}}==
 {{{{Photograph
  |photographer      = Q685592
- |title             = {{{{Title|{name}|lang=de}}}}
- |description       = {{{{de|1={m.get('IMAGE_DESCRIPTION', '')}}}}}
-                      {{{{en|1={en_desc}}}}}
- |depicted place    = {muni_qid or muni}
- |date              = {when['wikitext']}
+ |title             = {{{{Title|{_wt(name)}|lang=de}}}}
+ |description       = {{{{de|1={_wt(m.get('IMAGE_DESCRIPTION', ''))}}}}}
+                      {{{{en|1={_wt(en_desc)}}}}}
+ |depicted place    = {muni_qid or muni or ''}
+ |date              = {when['wikitext'] if when else '{{Unknown|date}}'}
  |medium            = {'{{Technique|glass plate negative}}' if negative else ''}
  |dimensions        = {f"{{{{Size|unit=cm|height={h}|width={w}}}}}" if h and w else ''}
  |institution       = {{{{Institution:Swisstopo}}}}
@@ -173,13 +204,14 @@ def build_technical(item):
  |permission        = {{{{Attribution-Swisstopo}}}}
  |other_fields      = {_fields(fields)}
 }}}}
-{{{{Object location|{lat}|{lon}|region:{shown['country'].upper()}}}}}
-
-""" + "\n".join(f"[[Category:{c}]]" for c in cats) + "\n"
+""" + ("{{Personality rights}}\n" if portrait else "") + \
+        (f"{{{{Object location|{lat}|{lon}|region:{shown['country'].upper()}}}}}\n" if located else "") + \
+        "\n" + "\n".join(f"[[Category:{c}]]" for c in cats) + "\n"
+    year = f", {when['year']}" if when else ""
     sdc = s.structured_data(num=sig, when=when, depicted=muni_qid, created_at=None, url=url, camera=None,
-                            area=(lat, lon), captions={"en": f"Technical image by swisstopo: {name}, {when['year']}",
-                                                       "de": f"Technische Aufnahme von swisstopo: {name}, {when['year']}",
-                                                       "fr": f"Image technique de swisstopo : {name}, {when['year']}"},
+                            area=(lat, lon) if located else None, captions={"en": f"Technical image by swisstopo: {name}{year}",
+                                                       "de": f"Technische Aufnahme von swisstopo: {name}{year}",
+                                                       "fr": f"Image technique de swisstopo : {name}{year}"},
                             material=GLASS_NEGATIVE if negative else None, extra_depicts=depicts)
     return dict(num=sig, title=title, text=text, sdc=sdc, categories=plans, tif_url=m["URL"])
 

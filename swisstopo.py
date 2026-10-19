@@ -198,7 +198,8 @@ def _clean_filename(x):
 def parse_date(text):
     """swisstopo DATE_STRING -> Commons date wikitext and Wikidata time values.
 
-    Handles day (11.08.1915), year only (1924) and day ranges (20.03.-13.04.1922, 05.-07.08.1919, 06./07.07.1936).
+    Handles day (11.08.1915), year only (1924), day ranges (20.03.-13.04.1922, 05.-07.08.1919, 06./07.07.1936),
+    months (August 1933) and month ranges within a year (May/June 1932).
     Anything else raises ValueError, so the image is set aside instead of guessed.
     """
     text = text.strip()
@@ -217,6 +218,13 @@ def parse_date(text):
             raise ValueError(f"unrecognised date format {text!r}")
         return dict(wikitext=f"{{{{other date|between|{start}|{end}}}}}", time=f"{y}-{m2 if m1 in (None, m2) else '00'}-00",
                     precision=10 if m1 in (None, m2) else 9, year=y, earliest=start, latest=end)
+    if m := re.fullmatch(r"([A-Za-zäÄ]+)\.?\s?/\s?([A-Za-zäÄ]+)\.? (\d{4})", text):   # 'May/June 1932'
+        m1, m2 = MONTHS.get(m[1].lower()), MONTHS.get(m[2].lower())
+        if m1 and m2 and m1 < m2:
+            y = m[3]
+            last = (datetime.date(int(y) + m2 // 12, m2 % 12 + 1, 1) - datetime.timedelta(days=1)).isoformat()
+            return dict(wikitext=f"{{{{other date|between|{y}-{m1:02d}|{y}-{m2:02d}}}}}", time=f"{y}-00-00",
+                        precision=9, year=y, earliest=f"{y}-{m1:02d}-01", latest=last)
     if m := re.fullmatch(r"([A-Za-zäÄ]+)\.? (\d{4})", text):
         month = MONTHS.get(m[1].lower())
         if month:
@@ -400,12 +408,11 @@ def structured_data(num, when, depicted, created_at, url, camera, area, captions
     """
     coord = lambda lat, lon: {"value": {"latitude": lat, "longitude": lon, "altitude": None, "precision": 1e-05,
                                         "globe": "http://www.wikidata.org/entity/Q2"}, "type": "globecoordinate"}
-    claims = [
-        _claim("P170", _item(SWISSTOPO)),                                          # creator
-        _claim("P571", _time(when["time"], when["precision"]),                     # inception
-               [(q, _time(when[k], 11)) for q, k in (("P1319", "earliest"), ("P1326", "latest")) if k in when]),
-        _claim("P195", _item(SWISSTOPO), [("P217", {"value": num, "type": "string"})]),  # collection + inventory no.
-    ]
+    claims = [_claim("P170", _item(SWISSTOPO))]                                    # creator
+    if when:                                                                       # None: date not recorded
+        claims.append(_claim("P571", _time(when["time"], when["precision"]),      # inception
+                             [(q, _time(when[k], 11)) for q, k in (("P1319", "earliest"), ("P1326", "latest")) if k in when]))
+    claims.append(_claim("P195", _item(SWISSTOPO), [("P217", {"value": num, "type": "string"})]))  # collection + inventory no.
     if material:
         claims.append(_claim("P186", _item(material)))                             # made from material
     claims += [
@@ -416,7 +423,8 @@ def structured_data(num, when, depicted, created_at, url, camera, area, captions
     if camera:
         heading = [("P7787", {"value": {"amount": f"+{camera[2]}", "unit": DEGREE}, "type": "quantity"})]             if camera[2] is not None else []
         claims.append(_claim("P1259", coord(camera[0], camera[1]), heading))      # coordinates of the point of view
-    claims.append(_claim("P9149", coord(*area)))                                   # coordinates of depicted place
+    if area:
+        claims.append(_claim("P9149", coord(*area)))                               # coordinates of depicted place
     if depicted:
         claims.append(_claim("P180", _item(depicted)))                             # depicts
     if extra_depicts:
