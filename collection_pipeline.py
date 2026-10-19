@@ -20,7 +20,7 @@ without a preview, more than MAX_SET_ASIDE of a batch set aside for reasons othe
 
 Usage: python collection_pipeline.py run oblique technical [--batches 1000] [--size N] [--shards 4] [--edit-interval 1]
        python collection_pipeline.py prepare KIND OUT.json COUNT     (one batch; used by run)
-Log: collections.log (one line per batch step; the last line starts with RESULT); details in <batch>.log.
+Log: collections.log or --log FILE (one line per batch step; the last line starts with RESULT); details in <batch>.log.
 """
 import argparse
 import csv
@@ -411,10 +411,13 @@ def data_error(p):
 
 # ---------------------------------------------------------------- the unattended run
 
+LOG = ["collections.log"]   # --log: one file per job when two jobs run side by side
+
+
 def log(msg):
     line = f"{time.strftime('%Y-%m-%d %H:%M')} {msg}"
     print(line, flush=True)
-    with open(os.path.join(HERE, "collections.log"), "a", encoding="utf-8") as f:
+    with open(os.path.join(HERE, LOG[0]), "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 
@@ -540,9 +543,11 @@ def main():
     ap.add_argument("kinds", nargs="+", choices=list(KINDS))
     ap.add_argument("--batches", type=int, default=100000, help="at most this many batches per collection")
     ap.add_argument("--shards", type=int, default=4)
+    ap.add_argument("--log", default="collections.log", help="summary log file (one per job)")
     ap.add_argument("--size", type=int, help="files per batch (default: the collection's own size)")
     ap.add_argument("--edit-interval", type=float, default=1.0)
     a = ap.parse_args()
+    LOG[0] = a.log
     if a.size:
         for k in a.kinds:
             KINDS[k]["size"] = a.size
