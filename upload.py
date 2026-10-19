@@ -130,6 +130,10 @@ def main():
                 added = write_structured_data(site, p["title"], sdc,
                                               f"Structured data from swisstopo metadata ([[{p.get('request', REQUEST)}]])")
                 record(p, sdc_done=True)
+                try:   # re-render the page so tracking categories see the structured data ("missing SDC ...")
+                    site.purgepages([pywikibot.FilePage(site, p["title"])], forcelinkupdate=True)
+                except Exception as e:  # noqa: BLE001 - cosmetic; the next re-render does the same
+                    print(f"{p['num']}: purge failed ({type(e).__name__}); continuing", flush=True)
                 if args.delete_uploaded and os.path.exists(p["stripped"]):
                     os.remove(p["stripped"])
                 print(f"uploaded and verified, structured data: {len(added)} added | {p['title']}", flush=True)
