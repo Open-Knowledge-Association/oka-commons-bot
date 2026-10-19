@@ -230,5 +230,55 @@ def build_technical(item):
     return dict(num=sig, title=title, text=text, sdc=sdc, categories=plans, tif_url=m["URL"])
 
 
+INSTRUMENTS = dict(name=f"{TECH['root']} - instrument collection", parents=[TECH["root"], "Surveying instruments"],
+                   en="Photographs of instruments from swisstopo's historical instrument collection (taken 2012 onward).",
+                   de="Fotografien von Instrumenten aus der historischen Instrumentensammlung von swisstopo (ab 2012).")
+
+
+def build_instrument(item):
+    """Born-digital photographs of swisstopo's historical instrument collection (records with ACQUISITION_DATE):
+    studio photographs, so no place or coordinates; tags and catalogue links from the record."""
+    m = item["meta"]
+    sig, name = m["ORIGINAL_SIGNATURE"], m["IMAGE_TITLE"]
+    if m.get("AUTHOR") not in ("swisstopo", "", "N/A", None):
+        raise ValueError(f"author is not swisstopo: {m.get('AUTHOR')}")
+    when = s.parse_date(".".join(reversed(m["ACQUISITION_DATE"][:10].split("-"))))   # 2012-08-23 -> 23.08.2012
+    url = f"https://data.geo.admin.ch/browser/index.html#/collections/{TECH['collection']}/items/{item['id']}"
+    tif = next(h["href"] if isinstance(h, dict) else h for n, h in item["assets"].items() if n.endswith(".tif"))
+    title = f"File:{s._clean_filename(name)} - Swisstopo technical image {sig}.tif"
+    tags = "; ".join(t.strip() for t in m.get("TAGS", "").split(";") if t.strip())
+    root = dict(name=TECH["root"], sortkey=None, parents=TECH["parents"],
+                en="Technical photographs (survey points, instruments, work) by the Swiss Federal Office of Topography (swisstopo).",
+                de="Technische Aufnahmen (Vermessungspunkte, Instrumente, Arbeiten) des Bundesamts für Landestopografie (swisstopo).")
+    plans = [root, dict(INSTRUMENTS, sortkey="Instrument collection")] + \
+        [q for q in _plans(TECH["root"], "", None, when["year"], "Technical images", "Technische Aufnahmen") if " in " in q["name"]]
+    cats = [p["name"] for p in plans[1:]] + ["Photos uploaded by OKA.wiki"]
+    fields = [("Collection (swisstopo)", _wt(m.get("COLLECTION"))), ("Tags (swisstopo)", _wt(tags) if tags else None),
+              ("Original ID", _wt(m.get("ORIGINAL_ID"))),
+              ("Archive record", f"[{m['AUGIAS_URL']} swisstopo historic archive]" if m.get("AUGIAS_URL", "").startswith("http") else None),
+              ("Memobase", f"[{m['MEMOBASE_URL']} Memobase]" if m.get("MEMOBASE_URL", "").startswith("http") else None)]
+    text = f"""=={{{{int:filedesc}}}}==
+{{{{Photograph
+ |photographer      = Q685592
+ |title             = {{{{Title|{_wt(name)}|lang=de}}}}
+ |description       = {{{{de|1=Instrument aus der historischen Instrumentensammlung von swisstopo: {_wt(name)}.}}}}
+                      {{{{en|1=Instrument from swisstopo's historical instrument collection: {_wt(name)}.}}}}
+ |date              = {when['wikitext']}
+ |institution       = {{{{Institution:Swisstopo}}}}
+ |accession number  = {sig}
+ |source            = [{url} swisstopo geo.admin.ch browser]; reduced-resolution overviews removed from the source GeoTIFF without re-encoding
+ |permission        = {{{{Attribution-Swisstopo}}}}
+ |other_fields      = {_fields(fields)}
+}}}}
+
+""" + "\n".join(f"[[Category:{c}]]" for c in cats) + "\n"
+    sdc = s.structured_data(num=sig, when=when, depicted=None, created_at=None, url=url, camera=None, area=None,
+                            captions={"en": f"Instrument from swisstopo's historical instrument collection: {name}",
+                                      "de": f"Instrument aus der historischen Instrumentensammlung von swisstopo: {name}",
+                                      "fr": f"Instrument de la collection historique de swisstopo : {name}"},
+                            material=None)
+    return dict(num=sig, title=title, text=text, sdc=sdc, categories=plans, tif_url=tif)
+
+
 def load_samples(path="work/samples/samples.json"):
     return json.load(open(path, encoding="utf-8"))

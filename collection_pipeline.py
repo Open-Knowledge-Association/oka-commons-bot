@@ -66,8 +66,8 @@ MAX_SET_ASIDE = 0.05
 MAX_DATA_ERRORS = 0.20
 BAD_TITLE_CHARS = re.compile(r"[/:\\\[\]#<>|{}]")
 # The technical images' instrument-photo series (born-digital, 2013; about 5,200 items, 000-606... to 000-612...)
-# has another CSV layout: no coordinates and an ACQUISITION_DATE column. Its page layout has not been
-# reviewed yet, so these items are set aside (not counted as failures) until it has. Records naming another
+# has another CSV layout: no coordinates and an ACQUISITION_DATE column. Since 2026-10-19 it is built by
+# swisstopo_more.build_instrument; items set aside under DEFERRED before that are retried. Records naming another
 # author (postcard publishers, photographers) are set aside too: swisstopo's licence and authorship may not apply.
 DEFERRED = "deferred: instrument-photo record layout (no coordinates) not handled yet"
 THIRD_PARTY = "deferred: author is not swisstopo"
@@ -198,15 +198,15 @@ def prepare_one(kind, item):
              verified=False, problems=[])
     try:
         meta = read_meta(item)
-        if kind == "technical" and "DATE_STRING" not in meta and "ACQUISITION_DATE" in meta:
-            p["problems"] = [DEFERRED]
-            return p
-        if kind == "technical" and (meta.get("AUTHOR") not in (None, "", "N/A") or meta.get("TNA_CATEGORY") == "Ansichtskarten"):
+        if kind == "technical" and (meta.get("AUTHOR") not in (None, "", "N/A", "swisstopo") or meta.get("TNA_CATEGORY") == "Ansichtskarten"):
             p["problems"] = [f"{THIRD_PARTY} ({meta.get('AUTHOR')}, {meta.get('TNA_CATEGORY')})"]
             return p
         if KINDS[kind].get("reduced"):
             return prepare_reduced(kind, item, meta, p)
-        built = KINDS[kind]["build"]({**item, "meta": meta})
+        if kind == "technical" and "DATE_STRING" not in meta and "ACQUISITION_DATE" in meta:
+            built = more.build_instrument({**item, "meta": meta})      # instrument-photo series (born-digital)
+        else:
+            built = KINDS[kind]["build"]({**item, "meta": meta})
     except Exception as e:  # odd record (date, place outside the known countries, ...): set aside for review
         p["problems"] = [f"build failed: {type(e).__name__}: {e}"]
         return p
@@ -356,7 +356,7 @@ def retryable(p):
     """Set aside only because a build or check failed (not uploaded, not a duplicate)."""
     probs = p.get("problems") or []
     return (not p.get("uploaded") and not p.get("already_on_commons") and bool(probs)
-            and all(x.startswith(("build failed", "file check failed")) for x in probs))
+            and all(x.startswith(("build failed", "file check failed")) or x == DEFERRED for x in probs))
 
 
 def batch_files(kind):
