@@ -159,18 +159,18 @@ def build_aerial(kind, item, reduced=None):
     return dict(num=inv, title=title, text=text, sdc=sdc, categories=plans, tif_url=raw_scan_url(item))
 
 
-PLACEHOLDERS = {(2600969, 1197427), (2499999, 1100001)}   # swisstopo's site at Wabern; a round corner value
+WABERN = (2600969, 1197427)   # swisstopo's site, the position given for records with no real one
+WABERN_RADIUS = 300           # metres; variants near it are stand-ins too (a test instrument, a map-reading course)
 
 
 def placeholder_position(e, n):
-    """True if the record's position is a stand-in: missing, or exactly one of PLACEHOLDERS (swisstopo's site is
-    given for about half the technical images, from Ticino border stones to aircraft; real photos of the site
-    have varying positions around it)."""
+    """True if a technical image's position is a stand-in: missing, at swisstopo's site at Wabern (given for about
+    half the technical images, from Ticino border stones to aircraft), or the round value 2499999/1100001."""
     try:
         e, n = float(e), float(n)
     except (TypeError, ValueError):
         return True
-    return (e, n) in PLACEHOLDERS
+    return ((e - WABERN[0]) ** 2 + (n - WABERN[1]) ** 2) ** 0.5 <= WABERN_RADIUS or (e, n) == (2499999, 1100001)
 
 
 def build_technical(item):
