@@ -1,6 +1,8 @@
 """Upload swisstopo's oblique aerial images and technical images to Commons, batch after batch, unattended.
 
-Approved in Commons:Bots/Requests/OKA bot 2 (full resolution, overviews removed without re-encoding).
+Approved in Commons:Bots/Requests/OKA bot 2 (full resolution, overviews removed without re-encoding). The vertical
+aerial images (kinds colour, ir, bw) go up as reduced-resolution JPEG copies of about 30 MP of the raw scan
+(never the orthophoto), as jz decided on 2026-10-18; their duplicate check is by inventory number only.
 For each collection the STAC item list is fetched once and cached (stac-<kind>.json); batches are
 named <kind>001.json, <kind>002.json, ... and a finished batch gets a <kind>NNN.done file, so a rerun
 continues with the first unfinished batch.
@@ -16,7 +18,7 @@ Stops for review on: a failed step, any upload process stopping (or hanging: the
 without a preview, more than MAX_SET_ASIDE of a batch set aside for reasons other than the record itself
 (duplicates do not count), or more than MAX_DATA_ERRORS set aside for errors in swisstopo's records.
 
-Usage: python collection_pipeline.py run oblique technical [--batches 1000] [--shards 4] [--edit-interval 1]
+Usage: python collection_pipeline.py run oblique technical [--batches 1000] [--size N] [--shards 4] [--edit-interval 1]
        python collection_pipeline.py prepare KIND OUT.json COUNT     (one batch; used by run)
 Log: collections.log (one line per batch step; the last line starts with RESULT); details in <batch>.log.
 """
@@ -538,8 +540,12 @@ def main():
     ap.add_argument("kinds", nargs="+", choices=list(KINDS))
     ap.add_argument("--batches", type=int, default=100000, help="at most this many batches per collection")
     ap.add_argument("--shards", type=int, default=4)
+    ap.add_argument("--size", type=int, help="files per batch (default: the collection's own size)")
     ap.add_argument("--edit-interval", type=float, default=1.0)
     a = ap.parse_args()
+    if a.size:
+        for k in a.kinds:
+            KINDS[k]["size"] = a.size
     totals = {}
     try:
         for kind in a.kinds:
