@@ -46,8 +46,16 @@ KINDS = {
                     build=lambda item: more.build_aerial("oblique", item), label="oblique aerial photograph"),
     "technical": dict(collection=more.TECH["collection"], size=50, workers=2,
                       build=more.build_technical, label="technical image"),
+    # Vertical aerial images: reduced-resolution JPEG copies only (jz, 2026-10-18), never orthophotos. A 290 MP
+    # scan decodes to about 900 MB, so two conversions at a time.
+    **{k: dict(collection=more.AERIAL[k]["collection"], size=200, workers=2, reduced=True,
+               label=f"{more.AERIAL[k]['label']} photograph") for k in ("colour", "ir", "bw")},
 }
-SAMPLES = {"lubis-luftbilder_schraegaufnahmen_000-014-518", "technische-aufnahmen_000-389-690"}  # on Commons already
+SAMPLES = {"lubis-luftbilder_schraegaufnahmen_000-014-518", "technische-aufnahmen_000-389-690",  # on Commons already
+           "lubis-luftbilder_schwarzweiss_000-004-128", "lubis-luftbilder_farbe_000-005-172",
+           "lubis-luftbilder_infrarot_000-012-529"}
+TARGET_PIXELS = 30e6              # reduced copies: about 30 megapixels
+JPEG_MB = (1.5, 20)               # a reduced copy outside this size (expected about 3-12 MB) is set aside
 HERE = os.path.dirname(os.path.abspath(__file__))
 MIN_TIFF_BYTES = 100_000          # smaller than any real scan
 DISK_LIMIT = 3 * 10 ** 9          # bytes of downloads the work folders may hold (the tool's disk is shared)
@@ -83,13 +91,24 @@ def items(kind):
         while url:
             d = json.loads(s.http(url, params))
             params = None
-            out += [dict(id=f["id"], bbox=f["bbox"], assets={n: a["href"] for n, a in f["assets"].items()})
-                    for f in d["features"]]
+            # only what the pages need (metadata, the raw scan, a calibration report; no orthophoto or quickview),
+            # with the usual URL stored as None: the black-and-white list has 222,000 items
+            out += [dict(id=f["id"], bbox=f["bbox"], assets={
+                n: (None if a["href"] == _standard_href(kind, f["id"], n) else a["href"]) for n, a in f["assets"].items()
+                if n.endswith(".csv") or (n.endswith(".tif") and "_op_" not in n) or "calibration" in n})
+                for f in d["features"]]
             url = next((l["href"] for l in d["links"] if l["rel"] == "next"), None)
         tmp = cache + ".tmp"
         json.dump(out, open(tmp, "w", encoding="utf-8"))
         os.replace(tmp, cache)
-    return json.load(open(cache, encoding="utf-8"))
+    out = json.load(open(cache, encoding="utf-8"))
+    for it in out:
+        it["assets"] = {n: h or _standard_href(kind, it["id"], n) for n, h in it["assets"].items()}
+    return out
+
+
+def _standard_href(kind, item_id, name):
+    return f"https://data.geo.admin.ch/{KINDS[kind]['collection']}/{item_id}/{name}"
 
 
 def read_meta(item):
@@ -183,6 +202,8 @@ def prepare_one(kind, item):
         if kind == "technical" and (meta.get("AUTHOR") not in (None, "", "N/A") or meta.get("TNA_CATEGORY") == "Ansichtskarten"):
             p["problems"] = [f"{THIRD_PARTY} ({meta.get('AUTHOR')}, {meta.get('TNA_CATEGORY')})"]
             return p
+        if KINDS[kind].get("reduced"):
+            return prepare_reduced(kind, item, meta, p)
         built = KINDS[kind]["build"]({**item, "meta": meta})
     except Exception as e:  # odd record (date, place outside the known countries, ...): set aside for review
         p["problems"] = [f"build failed: {type(e).__name__}: {e}"]
@@ -215,6 +236,117 @@ def prepare_one(kind, item):
         for f in (src, dst, src + ".part"):
             if os.path.exists(f):
                 os.remove(f)
+    return p
+
+
+def _bands(page):
+    """The page's pixels one row of tiles (or one strip) at a time, as uint8 arrays (rows, width, samples)."""
+    import numpy as np
+
+    sh, sw = page.shape[:2]
+    spp = page.shape[2] if len(page.shape) == 3 else 1
+    band, band_y = None, -1
+    for seg, (_, _, y, x, _), shape in page.segments(maxworkers=1):
+        if y != band_y:
+            if y < band_y:
+                raise ValueError("segments out of order")
+            if band is not None:
+                yield band
+            band, band_y = np.zeros((min(shape[1], sh - y), sw, spp), np.uint8), y
+        if seg is not None:                  # None: an empty segment, left black
+            w = min(shape[2], sw - x)
+            band[:, x:x + w] = seg[0, :band.shape[0], :w]
+    if band is not None:
+        yield band
+
+
+def reduce_to_jpeg(src, dst, grey):
+    """Resize the scan with Lanczos to about TARGET_PIXELS (never enlarged) and save a JPEG (quality 92, progressive;
+    4:2:0 for colour, greyscale for black and white). Returns (copy size, scan size).
+
+    Pillow resamples in two passes, horizontal then vertical, through an 8-bit intermediate. The horizontal pass is
+    done here one band of tiles at a time, so the full scan is never held in memory (a 290 MP colour scan needs
+    about 2.5 GB at once, this about 0.7 GB); the result is the same as resizing the whole image."""
+    import numpy as np
+    import tifffile
+    from PIL import Image
+
+    Image.MAX_IMAGE_PIXELS = None
+    with tifffile.TiffFile(src) as t:
+        page = t.pages[0]
+        if page.dtype.name != "uint8" or len(page.shape) not in (2, 3) or (len(page.shape) == 3 and page.shape[2] != 3):
+            raise ValueError(f"unexpected scan layout {page.shape} {page.dtype}")
+        sh, sw = page.shape[:2]
+        mode = "L" if len(page.shape) == 2 else "RGB"
+        scale = min(1.0, (TARGET_PIXELS / (sw * sh)) ** 0.5)
+        size = (round(sw * scale), round(sh * scale))
+        parts = []
+        for band in _bands(page):
+            img = Image.fromarray(band[:, :, 0] if mode == "L" else band)
+            if grey and mode == "RGB":
+                img = img.convert("L")
+            parts.append(np.asarray(img.resize((size[0], band.shape[0]), Image.LANCZOS) if scale < 1 else img))
+    mid = Image.fromarray(np.concatenate(parts))
+    del parts
+    out = mid.resize(size, Image.LANCZOS) if scale < 1 else mid   # width already matches: vertical pass only
+    del mid
+    kwargs = dict(quality=92, progressive=True, optimize=True)
+    if out.mode == "RGB":
+        kwargs["subsampling"] = 2                                       # 4:2:0
+    out.save(dst, "JPEG", **kwargs)
+    with Image.open(dst) as check:
+        check.load()
+        if check.size != size or check.mode != out.mode:
+            raise ValueError(f"saved JPEG is {check.size} {check.mode}, expected {size} {out.mode}")
+    return size, (sw, sh)
+
+
+def prepare_reduced(kind, item, meta, p):
+    """Vertical aerial image: duplicate check by inventory number, download the raw scan, make the reduced JPEG
+    copy, build the page with its pixel sizes and dry-run it."""
+    num = p["num"] = meta.get("INVENTORY_NUMBER") or item["id"]
+    url = more.raw_scan_url(item)
+    if not url or "_op_" in url:
+        p["problems"] = ["no raw scan asset"]
+        return p
+    src = os.path.join(work_dir(kind), f"{item['id']}.tif")
+    dst = os.path.join(work_dir(kind), f"{item['id']}.jpg")
+    try:
+        if title_on_commons(kind, num):
+            p["already_on_commons"] = True
+            return p
+        wait_for_disk()
+        p["source_sha1"], p["source_bytes"] = download(url, src)
+        size, source_size = reduce_to_jpeg(src, dst, grey=(kind == "bw"))
+        os.remove(src)
+    except Exception as e:
+        p.update(problems=[f"file check failed: {type(e).__name__}: {e}"])
+        for f in (src, dst, src + ".part"):
+            if os.path.exists(f):
+                os.remove(f)
+        return p
+    try:
+        built = more.build_aerial(kind, {**item, "meta": meta}, reduced=dict(size=size, source_size=source_size))
+    except Exception as e:  # odd record: set aside for review
+        os.remove(dst)
+        p["problems"] = [f"build failed: {type(e).__name__}: {e}"]
+        return p
+    p.update(built, item_id=item["id"], kind=kind, request=REQUEST, stripped=dst, verified=True,
+             jpeg_size=list(size), source_size=list(source_size), jpeg_bytes=os.path.getsize(dst),
+             comment=f"Upload swisstopo {KINDS[kind]['label']} {built['num']}, reduced-resolution copy ([[{REQUEST}]])")
+    problems = []
+    if BAD_TITLE_CHARS.search(p["title"][5:]):
+        problems.append(f"file name has a character not allowed in titles: {p['title']}")
+    mb = p["jpeg_bytes"] / 2 ** 20
+    if not JPEG_MB[0] <= mb <= JPEG_MB[1]:
+        problems.append(f"jpeg size: {mb:.1f} MB, outside {JPEG_MB[0]}-{JPEG_MB[1]} MB")
+    try:
+        problems += dry_run(p["title"], p["text"], [c["name"] for c in p["categories"]])
+    except Exception as e:
+        problems.append(f"file check failed: dry run: {type(e).__name__}: {e}")
+    p["problems"] = problems
+    if problems and os.path.exists(dst):
+        os.remove(dst)
     return p
 
 

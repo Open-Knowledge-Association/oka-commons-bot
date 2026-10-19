@@ -2,3 +2,4 @@ pywikibot>=11
 tifffile
 imagecodecs
 numpy
+pillow>=12

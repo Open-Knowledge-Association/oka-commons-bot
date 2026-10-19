@@ -79,8 +79,16 @@ def _num(x):
     return int(v) if v.is_integer() else v
 
 
-def build_aerial(kind, item):
-    """item: a STAC feature (id, assets, bbox) with its CSV metadata in item['meta']."""
+def raw_scan_url(item):
+    """The raw scan (*_2056.tif or, for oblique images, *.tif); never the orthophoto (*_op_2056.tif)."""
+    tifs = {n: h for n, h in item["assets"].items() if n.endswith(".tif") and "_op_" not in n}
+    return next((h for n, h in tifs.items() if n.endswith("_2056.tif")), None) or next(iter(tifs.values()), None)
+
+
+def build_aerial(kind, item, reduced=None):
+    """item: a STAC feature (id, assets, bbox) with its CSV metadata in item['meta'].
+
+    reduced: for a reduced-resolution JPEG copy, dict(size=(w, h), source_size=(w, h)) of the copy and the scan."""
     cfg, m = AERIAL[kind], item["meta"]
     inv, year = m["INVENTORY_NUMBER"], m["YEAR"]
     when = s.parse_date(m["ACQUIRED"]) if m.get("ACQUIRED") not in (None, "", "N/A") else s.parse_date(year)
@@ -92,13 +100,12 @@ def build_aerial(kind, item):
     where_en = f"{muni}, canton of {shown['canton']}" if shown["canton"] else f"{muni}, {s.COUNTRIES[shown['country']][0]}"
     where_de = f"{muni}, Kanton {shown['canton_de']}" if shown["canton"] else f"{muni}, {s.COUNTRIES[shown['country']][1]}"
     place = m.get("PLACE") if m.get("PLACE") not in (None, "", "N/A") else None
-    title = f"File:{s._clean_filename(muni)} - Swisstopo {cfg['label']} photograph {inv}.tif"
+    title = f"File:{s._clean_filename(muni)} - Swisstopo {cfg['label']} photograph {inv}.{'jpg' if reduced else 'tif'}"
     label = place or f"{muni} ({year})"
     lang = LANG.get(shown.get("code"), "de")
     fl = _num(m.get("FOCAL_LENGTH"))
     side = _num(m["DIMENSION"].split(" x ")[0]) if " x " in m.get("DIMENSION", "") else None
     alt = _num(m.get("Z"))
-    asset = lambda suffix: next((h for n, h in item["assets"].items() if n.endswith(suffix)), None)
     calibration = next((h for n, h in item["assets"].items() if "calibration" in n), None)
     fields = [("Series", _wt(m.get("SERIES")) if m.get("SERIES") not in ("", "N/A") else None),
               ("Place (swisstopo)", _wt(place)),
@@ -111,6 +118,13 @@ def build_aerial(kind, item):
               ("Camera calibration", f"[{calibration} swisstopo calibration report (PDF)]" if calibration else None)]
     url = f"https://data.geo.admin.ch/browser/index.html#/collections/{cfg['collection']}/items/{item['id']}"
     view = "oblique" if kind == "oblique" else "vertical"
+    if reduced:
+        (w, h), (sw, sh) = reduced["size"], reduced["source_size"]
+        stac = f"https://data.geo.admin.ch/api/stac/v1/collections/{cfg['collection']}/items/{item['id']}"
+        source_note = (f"reduced-resolution copy ({w} × {h} px, JPEG) of the full-resolution scan ({sw} × {sh} px), "
+                       f"which is available from swisstopo: [{stac} STAC item]")
+    else:
+        source_note = "reduced-resolution overviews removed from the source GeoTIFF without re-encoding"
     plans = [dict(name=cfg["root"], sortkey=None, parents=cfg["parents"],
                   en=f"{cfg['en']}s by the Swiss Federal Office of Topography (swisstopo).",
                   de=f"{cfg['de']}er des Bundesamts für Landestopografie (swisstopo).")] + \
@@ -128,7 +142,7 @@ def build_aerial(kind, item):
  |dimensions        = {f"{{{{Size|unit=cm|height={side}|width={side}}}}}" if side else ''}
  |institution       = {{{{Institution:Swisstopo}}}}
  |accession number  = {inv}
- |source            = [{url} swisstopo geo.admin.ch browser]; reduced-resolution overviews removed from the source GeoTIFF without re-encoding
+ |source            = [{url} swisstopo geo.admin.ch browser]; {source_note}
  |permission        = {{{{Attribution-Swisstopo}}}}
  |other_fields      = {_fields(fields)}
 }}}}
@@ -142,7 +156,7 @@ def build_aerial(kind, item):
                                       "de": f"{cfg['de']} von swisstopo, {label}, {when['year']}",
                                       "fr": f"{cfg['fr']} de swisstopo, {label}, {when['year']}"},
                             material=FILM, instance_of=AERIAL_PHOTOGRAPH)
-    return dict(num=inv, title=title, text=text, sdc=sdc, categories=plans, tif_url=asset("_2056.tif") or asset(".tif"))
+    return dict(num=inv, title=title, text=text, sdc=sdc, categories=plans, tif_url=raw_scan_url(item))
 
 
 PLACEHOLDERS = {(2600969, 1197427), (2499999, 1100001)}   # swisstopo's site at Wabern; a round corner value
