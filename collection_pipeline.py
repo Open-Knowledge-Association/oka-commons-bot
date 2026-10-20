@@ -48,7 +48,7 @@ KINDS = {
     # at a time keeps the job under its 4 GiB next to the upload processes.
     "oblique": dict(collection=more.AERIAL["oblique"]["collection"], size=20, workers=1,
                     build=lambda item: more.build_aerial("oblique", item), label="oblique aerial photograph"),
-    "technical": dict(collection=more.TECH["collection"], size=50, workers=2,
+    "technical": dict(collection=more.TECH["collection"], size=25, workers=2,
                       build=more.build_technical, label="technical image"),
     # Vertical aerial images: reduced-resolution copies only (jz, 2026-10-18), never orthophotos. Since 2026-10-20
     # (jz) the copy is the scan's own built-in reduced level, copied without decoding (light: four at a time).
@@ -62,7 +62,7 @@ REDUCED_MB = (0.5, 30)            # a reduced copy outside this size (expected a
 MIN_SIDE = 4000                   # the reduced copy is the smallest built-in level at least this many px on its long side
 HERE = os.path.dirname(os.path.abspath(__file__))
 MIN_TIFF_BYTES = 100_000          # smaller than any real scan
-DISK_LIMIT = 3 * 10 ** 9          # bytes of downloads the work folders may hold (the tool's disk is shared)
+DISK_LIMIT = 2.5e9                # bytes one collection's work folder may hold (the tool's disk is shared)
 MAX_ATTEMPTS = 3                  # preparation attempts for a file set aside by a failed build or check
 MAX_SET_ASIDE = 0.05
 MAX_DATA_ERRORS = 0.20
@@ -141,13 +141,15 @@ def work_dir(kind):
     return os.path.join(HERE, "work", kind)
 
 
-def disk_used():
-    return sum(os.path.getsize(f) for k in KINDS for f in glob.glob(os.path.join(work_dir(k), "*")) if os.path.isfile(f))
+def disk_used(kind):
+    """Bytes in this collection's own work folder. Each job budgets only its own collections, so two jobs never
+    wait on each other's files (2026-10-20: a shared budget deadlocked the technical and colour jobs)."""
+    return sum(os.path.getsize(f) for f in glob.glob(os.path.join(work_dir(kind), "*")) if os.path.isfile(f))
 
 
-def wait_for_disk():
+def wait_for_disk(kind):
     for _ in range(6 * 60):                  # up to 3 hours, while the upload processes free space
-        if disk_used() < DISK_LIMIT:
+        if disk_used(kind) < DISK_LIMIT:
             return
         time.sleep(30)
     raise RuntimeError(f"work folders still above {DISK_LIMIT / 1e9:.0f} GB after 3 hours")
@@ -223,7 +225,7 @@ def prepare_one(kind, item):
         if title_on_commons(kind, p["num"]):
             p["already_on_commons"] = True
             return p
-        wait_for_disk()
+        wait_for_disk(kind)
         sha, size = download(p["tif_url"], src)
         p["source_sha1"], p["source_bytes"] = sha, size
         if sha1_on_commons(sha):
@@ -288,7 +290,7 @@ def prepare_reduced(kind, item, meta, p):
         if title_on_commons(kind, num):
             p["already_on_commons"] = True
             return p
-        wait_for_disk()
+        wait_for_disk(kind)
         p["source_sha1"], p["source_bytes"] = download(url, src)
         level, size, source_size = built_in_level(src)
         strip_overviews(src, dst, level=level)
