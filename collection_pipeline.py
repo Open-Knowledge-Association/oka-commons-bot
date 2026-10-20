@@ -509,6 +509,23 @@ def run_kind(kind, max_batches, shards, interval):
     return total
 
 
+def clean_orphans(kind):
+    """At the start of a run: delete files in this collection's work folder that no pending batch needs (left
+    behind when a job was stopped mid-batch). Otherwise they count against DISK_LIMIT and the run waits forever."""
+    needed = {os.path.abspath(p["stripped"]) for f in batch_files(kind)
+              for p in json.load(open(f, encoding="utf-8"))
+              if p.get("stripped") and not (p.get("uploaded") and p.get("sdc_done"))}
+    folder = work_dir(kind)
+    gone = 0
+    for name in os.listdir(folder) if os.path.isdir(folder) else []:
+        path = os.path.abspath(os.path.join(folder, name))
+        if path not in needed and os.path.isfile(path):
+            os.remove(path)
+            gone += 1
+    if gone:
+        log(f"{kind}: removed {gone} leftover work files")
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "prepare":
         prepare(sys.argv[2], sys.argv[3], int(sys.argv[4]))
@@ -528,6 +545,8 @@ def main():
             KINDS[k]["size"] = a.size
     totals = {}
     try:
+        for kind in a.kinds:      # this job's own collections only: another job may be preparing other kinds
+            clean_orphans(kind)
         for kind in a.kinds:
             log(f"{kind}: starting")
             totals[kind] = run_kind(kind, a.batches, a.shards, a.edit_interval)
