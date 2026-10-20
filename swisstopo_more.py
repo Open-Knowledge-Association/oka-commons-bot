@@ -88,7 +88,8 @@ def raw_scan_url(item):
 def build_aerial(kind, item, reduced=None):
     """item: a STAC feature (id, assets, bbox) with its CSV metadata in item['meta'].
 
-    reduced: for a reduced-resolution JPEG copy, dict(size=(w, h), source_size=(w, h)) of the copy and the scan."""
+    reduced: for a reduced-resolution copy, dict(size=(w, h), source_size=(w, h)[, level=n]) of the copy and the
+    scan; with `level` the copy is the scan's built-in reduced level (TIFF), without it a JPEG copy."""
     cfg, m = AERIAL[kind], item["meta"]
     inv, year = m["INVENTORY_NUMBER"], m["YEAR"]
     when = s.parse_date(m["ACQUIRED"]) if m.get("ACQUIRED") not in (None, "", "N/A") else s.parse_date(year)
@@ -100,7 +101,8 @@ def build_aerial(kind, item, reduced=None):
     where_en = f"{muni}, canton of {shown['canton']}" if shown["canton"] else f"{muni}, {s.COUNTRIES[shown['country']][0]}"
     where_de = f"{muni}, Kanton {shown['canton_de']}" if shown["canton"] else f"{muni}, {s.COUNTRIES[shown['country']][1]}"
     place = m.get("PLACE") if m.get("PLACE") not in (None, "", "N/A") else None
-    title = f"File:{s._clean_filename(muni)} - Swisstopo {cfg['label']} photograph {inv}.{'jpg' if reduced else 'tif'}"
+    ext = "jpg" if reduced and "level" not in reduced else "tif"   # JPEG copies: the colour files uploaded before 2026-10-20
+    title = f"File:{s._clean_filename(muni)} - Swisstopo {cfg['label']} photograph {inv}.{ext}"
     label = place or f"{muni} ({year})"
     lang = LANG.get(shown.get("code"), "de")
     fl = _num(m.get("FOCAL_LENGTH"))
@@ -121,8 +123,13 @@ def build_aerial(kind, item, reduced=None):
     if reduced:
         (w, h), (sw, sh) = reduced["size"], reduced["source_size"]
         stac = f"https://data.geo.admin.ch/api/stac/v1/collections/{cfg['collection']}/items/{item['id']}"
-        source_note = (f"reduced-resolution copy ({w} × {h} px, JPEG) of the full-resolution scan ({sw} × {sh} px), "
-                       f"which is available from swisstopo: [{stac} STAC item]")
+        if "level" in reduced:
+            source_note = (f"reduced-resolution copy ({w} × {h} px): the scan's own built-in reduced level, copied "
+                           f"without re-encoding, of the full-resolution scan ({sw} × {sh} px), which is available from "
+                           f"swisstopo: [{stac} STAC item]")
+        else:
+            source_note = (f"reduced-resolution copy ({w} × {h} px, JPEG) of the full-resolution scan ({sw} × {sh} px), "
+                           f"which is available from swisstopo: [{stac} STAC item]")
     else:
         source_note = "reduced-resolution overviews removed from the source GeoTIFF without re-encoding"
     plans = [dict(name=cfg["root"], sortkey=None, parents=cfg["parents"],

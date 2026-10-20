@@ -11,12 +11,19 @@ TYPE_SIZE = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4,
 OFFSET_TAGS = {324: 325, 273: 279}  # TileOffsets->TileByteCounts, StripOffsets->StripByteCounts
 
 
-def strip_overviews(src_path, dst_path):
+def strip_overviews(src_path, dst_path, level=0):
+    """Copy IFD number `level` (0 = full resolution, 1, 2, ... = the built-in reduced levels) into a single-image
+    TIFF. For a reduced level the NewSubfileType tag ("reduced-resolution image") is dropped."""
     data = open(src_path, "rb").read()
     bo = {b"II": "<", b"MM": ">"}[data[:2]]
     if struct.unpack(bo + "H", data[2:4])[0] != 42:
         raise ValueError("not a classic TIFF (BigTIFF not supported)")
     ifd = struct.unpack(bo + "I", data[4:8])[0]
+    for _ in range(level):  # follow the chain of image directories
+        n = struct.unpack(bo + "H", data[ifd:ifd + 2])[0]
+        ifd = struct.unpack(bo + "I", data[ifd + 2 + 12 * n:ifd + 6 + 12 * n])[0]
+        if not ifd:
+            raise ValueError(f"the TIFF has no level {level}")
     n = struct.unpack(bo + "H", data[ifd:ifd + 2])[0]
     entries = []
     for i in range(n):
@@ -29,6 +36,8 @@ def strip_overviews(src_path, dst_path):
             off = struct.unpack(bo + "I", data[e + 8:e + 12])[0]
             raw = data[off:off + size]
         entries.append([tag, typ, count, raw])
+    if level:
+        entries = [t for t in entries if t[0] != 254]   # NewSubfileType: no longer a reduced-resolution copy
     tags = {t[0]: t for t in entries}
 
     def values(tag):

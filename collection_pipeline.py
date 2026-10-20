@@ -1,7 +1,7 @@
 """Upload swisstopo's oblique aerial images and technical images to Commons, batch after batch, unattended.
 
 Approved in Commons:Bots/Requests/OKA bot 2 (full resolution, overviews removed without re-encoding). The vertical
-aerial images (kinds colour, ir, bw) go up as reduced-resolution JPEG copies of about 30 MP of the raw scan
+aerial images (kinds colour, ir, bw) go up as the raw scan's built-in reduced level (about 18-22 MP, no re-encoding)
 (never the orthophoto), as jz decided on 2026-10-18; their duplicate check is by inventory number only.
 For each collection the STAC item list is fetched once and cached (stac-<kind>.json); batches are
 named <kind>001.json, <kind>002.json, ... and a finished batch gets a <kind>NNN.done file, so a rerun
@@ -35,6 +35,8 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import tifffile
+
 import swisstopo as s
 import swisstopo_more as more
 from strip_overviews import strip_overviews
@@ -48,16 +50,16 @@ KINDS = {
                     build=lambda item: more.build_aerial("oblique", item), label="oblique aerial photograph"),
     "technical": dict(collection=more.TECH["collection"], size=50, workers=2,
                       build=more.build_technical, label="technical image"),
-    # Vertical aerial images: reduced-resolution JPEG copies only (jz, 2026-10-18), never orthophotos. A 290 MP
-    # scan decodes to about 900 MB, so two conversions at a time.
-    **{k: dict(collection=more.AERIAL[k]["collection"], size=200, workers=2, reduced=True,
+    # Vertical aerial images: reduced-resolution copies only (jz, 2026-10-18), never orthophotos. Since 2026-10-20
+    # (jz) the copy is the scan's own built-in reduced level, copied without decoding (light: four at a time).
+    **{k: dict(collection=more.AERIAL[k]["collection"], size=200, workers=4, reduced=True,
                label=f"{more.AERIAL[k]['label']} photograph") for k in ("colour", "ir", "bw")},
 }
 SAMPLES = {"lubis-luftbilder_schraegaufnahmen_000-014-518", "technische-aufnahmen_000-389-690",  # on Commons already
            "lubis-luftbilder_schwarzweiss_000-004-128", "lubis-luftbilder_farbe_000-005-172",
            "lubis-luftbilder_infrarot_000-012-529"}
-TARGET_PIXELS = 30e6              # reduced copies: about 30 megapixels
-JPEG_MB = (1.5, 20)               # a reduced copy outside this size (expected about 3-12 MB) is set aside
+REDUCED_MB = (0.5, 30)            # a reduced copy outside this size (expected about 2-10 MB) is set aside
+MIN_SIDE = 4000                   # the reduced copy is the smallest built-in level at least this many px on its long side
 HERE = os.path.dirname(os.path.abspath(__file__))
 MIN_TIFF_BYTES = 100_000          # smaller than any real scan
 DISK_LIMIT = 3 * 10 ** 9          # bytes of downloads the work folders may hold (the tool's disk is shared)
@@ -262,64 +264,35 @@ def _bands(page):
         yield band
 
 
-def reduce_to_jpeg(src, dst, grey):
-    """Resize the scan with Lanczos to about TARGET_PIXELS (never enlarged) and save a JPEG (quality 92, progressive;
-    4:2:0 for colour, greyscale for black and white). Returns (copy size, scan size).
-
-    Pillow resamples in two passes, horizontal then vertical, through an 8-bit intermediate. The horizontal pass is
-    done here one band of tiles at a time, so the full scan is never held in memory (a 290 MP colour scan needs
-    about 2.5 GB at once, this about 0.7 GB); the result is the same as resizing the whole image."""
-    import numpy as np
-    import tifffile
-    from PIL import Image
-
-    Image.MAX_IMAGE_PIXELS = None
+def built_in_level(src):
+    """(level, (w, h) of that level, (w, h) of the full scan): the smallest of the scan's built-in reduced levels
+    whose longer side is at least MIN_SIDE px (level 2 for 17,000 px scans, level 1 for 9,700 px ones)."""
     with tifffile.TiffFile(src) as t:
-        page = t.pages[0]
-        if page.dtype.name != "uint8" or len(page.shape) not in (2, 3) or (len(page.shape) == 3 and page.shape[2] != 3):
-            raise ValueError(f"unexpected scan layout {page.shape} {page.dtype}")
-        sh, sw = page.shape[:2]
-        mode = "L" if len(page.shape) == 2 else "RGB"
-        scale = min(1.0, (TARGET_PIXELS / (sw * sh)) ** 0.5)
-        size = (round(sw * scale), round(sh * scale))
-        parts = []
-        for band in _bands(page):
-            img = Image.fromarray(band[:, :, 0] if mode == "L" else band)
-            if grey and mode == "RGB":
-                img = img.convert("L")
-            parts.append(np.asarray(img.resize((size[0], band.shape[0]), Image.LANCZOS) if scale < 1 else img))
-    mid = Image.fromarray(np.concatenate(parts))
-    del parts
-    out = mid.resize(size, Image.LANCZOS) if scale < 1 else mid   # width already matches: vertical pass only
-    del mid
-    kwargs = dict(quality=92, progressive=True, optimize=True)
-    if out.mode == "RGB":
-        kwargs["subsampling"] = 2                                       # 4:2:0
-    out.save(dst, "JPEG", **kwargs)
-    with Image.open(dst) as check:
-        check.load()
-        if check.size != size or check.mode != out.mode:
-            raise ValueError(f"saved JPEG is {check.size} {check.mode}, expected {size} {out.mode}")
-    return size, (sw, sh)
+        sizes = [(p.shape[1], p.shape[0]) for p in t.pages]
+    ok = [i for i, (w, h) in enumerate(sizes) if max(w, h) >= MIN_SIDE]
+    level = ok[-1] if ok else 0
+    return level, sizes[level], sizes[0]
 
 
 def prepare_reduced(kind, item, meta, p):
-    """Vertical aerial image: duplicate check by inventory number, download the raw scan, make the reduced JPEG
-    copy, build the page with its pixel sizes and dry-run it."""
+    """Vertical aerial image: duplicate check by inventory number, download the raw scan, copy out its built-in
+    reduced level (no decoding or re-encoding; verified tile by tile), build the page and dry-run it."""
     num = p["num"] = meta.get("INVENTORY_NUMBER") or item["id"]
     url = more.raw_scan_url(item)
     if not url or "_op_" in url:
         p["problems"] = ["no raw scan asset"]
         return p
     src = os.path.join(work_dir(kind), f"{item['id']}.tif")
-    dst = os.path.join(work_dir(kind), f"{item['id']}.jpg")
+    dst = os.path.join(work_dir(kind), f"{item['id']}.reduced.tif")
     try:
         if title_on_commons(kind, num):
             p["already_on_commons"] = True
             return p
         wait_for_disk()
         p["source_sha1"], p["source_bytes"] = download(url, src)
-        size, source_size = reduce_to_jpeg(src, dst, grey=(kind == "bw"))
+        level, size, source_size = built_in_level(src)
+        strip_overviews(src, dst, level=level)
+        verify(src, dst, level=level)
         os.remove(src)
     except Exception as e:
         p.update(problems=[f"file check failed: {type(e).__name__}: {e}"])
@@ -328,20 +301,22 @@ def prepare_reduced(kind, item, meta, p):
                 os.remove(f)
         return p
     try:
-        built = more.build_aerial(kind, {**item, "meta": meta}, reduced=dict(size=size, source_size=source_size))
+        built = more.build_aerial(kind, {**item, "meta": meta},
+                                  reduced=dict(size=size, source_size=source_size, level=level))
     except Exception as e:  # odd record: set aside for review
         os.remove(dst)
         p["problems"] = [f"build failed: {type(e).__name__}: {e}"]
         return p
     p.update(built, item_id=item["id"], kind=kind, request=REQUEST, stripped=dst, verified=True,
-             jpeg_size=list(size), source_size=list(source_size), jpeg_bytes=os.path.getsize(dst),
+             reduced_size=list(size), source_size=list(source_size), reduced_level=level,
+             reduced_bytes=os.path.getsize(dst),
              comment=f"Upload swisstopo {KINDS[kind]['label']} {built['num']}, reduced-resolution copy ([[{REQUEST}]])")
     problems = []
     if BAD_TITLE_CHARS.search(p["title"][5:]):
         problems.append(f"file name has a character not allowed in titles: {p['title']}")
-    mb = p["jpeg_bytes"] / 2 ** 20
-    if not JPEG_MB[0] <= mb <= JPEG_MB[1]:
-        problems.append(f"jpeg size: {mb:.1f} MB, outside {JPEG_MB[0]}-{JPEG_MB[1]} MB")
+    mb = p["reduced_bytes"] / 2 ** 20
+    if not REDUCED_MB[0] <= mb <= REDUCED_MB[1]:
+        problems.append(f"reduced copy size: {mb:.1f} MB, outside {REDUCED_MB[0]}-{REDUCED_MB[1]} MB")
     try:
         problems += dry_run(p["title"], p["text"], [c["name"] for c in p["categories"]])
     except Exception as e:
