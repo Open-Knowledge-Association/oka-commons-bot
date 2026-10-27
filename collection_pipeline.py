@@ -32,6 +32,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -276,6 +277,9 @@ def built_in_level(src):
     return level, sizes[level], sizes[0]
 
 
+RESIZE_LOCK = threading.Lock()
+
+
 def reduce_scan(src, dst, size):
     """For scans whose reduced levels no viewer reads (Deflate with YCbCr subsampling, which Commons previews as green
     bands): resize the full scan (level 0) with Lanczos to `size`, the chosen level's size, and save a JPEG-compressed
@@ -328,7 +332,8 @@ def prepare_reduced(kind, item, meta, p):
             strip_overviews(src, dst, level=level)
             verify(src, dst, level=level)
         else:
-            reduce_scan(src, dst, size)
+            with RESIZE_LOCK:                # about 0.5 GB each: one at a time keeps the job in its memory
+                reduce_scan(src, dst, size)
         os.remove(src)
     except Exception as e:
         p.update(problems=[f"file check failed: {type(e).__name__}: {e}"])
