@@ -189,9 +189,10 @@ def file_title(place, num):
 
 
 def _clean_filename(x):
-    """File-name-safe text: drop [ ] # < > | { }, and turn slash, colon and backslash (not allowed in file
-    names) into hyphens."""
+    """File-name-safe text: drop [ ] # < > | { }, turn slash, colon and backslash (not allowed in file
+    names) into hyphens, and collapse repeated apostrophes (Commons' title blacklist refuses '')."""
     x = re.sub(r"\s*[/:\\]\s*", "-", x)
+    x = re.sub(r"'{2,}", "'", x)
     return re.sub(r"\s+", " ", re.sub(r"[\[\]#<>|{}]", "", x)).strip()
 
 

@@ -91,7 +91,11 @@ def build_aerial(kind, item, reduced=None):
     reduced: for a reduced-resolution copy, dict(size=(w, h), source_size=(w, h)[, level=n]) of the copy and the
     scan; with `level` the copy is the scan's built-in reduced level (TIFF), without it a JPEG copy."""
     cfg, m = AERIAL[kind], item["meta"]
-    inv, year = m["INVENTORY_NUMBER"], m["YEAR"]
+    inv = m["INVENTORY_NUMBER"]
+    acquired = m.get("ACQUIRED") or ""
+    year = m.get("YEAR") or (acquired[-4:] if acquired[-4:].isdigit() else None)   # some records have no YEAR
+    if not year:
+        raise ValueError("no YEAR and no acquisition date")
     when = s.parse_date(m["ACQUIRED"]) if m.get("ACQUIRED") not in (None, "", "N/A") else s.parse_date(year)
     b = item["bbox"]
     obj_lon, obj_lat = round((b[0] + b[2]) / 2, 5), round((b[1] + b[3]) / 2, 5)

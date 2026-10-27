@@ -27,6 +27,8 @@ import time
 from botsession import commons_site, upload_with_retry, write_structured_data
 
 DEFERRED_PROPERTIES = set()  # properties held back for a later Wikidata linking step (none for now)
+# upload errors that refuse only this file's name: the file is set aside and the process goes on
+REFUSED_TITLE = ("titleblacklist-forbidden", "badfilename", "illegal-filename", "filename-tooshort")
 CHUNKED_ABOVE = 95 * 2 ** 20  # larger files go up in 20 MiB chunks
 REQUEST = "Commons:Bots/Requests/OKA bot"  # approval a page cites unless it names its own ("request")
 
@@ -120,8 +122,16 @@ def main():
                         pace()
                         extra = {"chunk_size": 20 * 2 ** 20} if os.path.getsize(p["stripped"]) > CHUNKED_ABOVE else {}
                         comment = p.get("comment") or f"Upload swisstopo terrestrial image {p['num']} ([[{REQUEST}]])"
-                        if not upload_with_retry(site, p["title"], p["stripped"], sha, text=p["text"], ignore_warnings=False,
-                                                 comment=comment, **extra):
+                        try:
+                            ok = upload_with_retry(site, p["title"], p["stripped"], sha, text=p["text"],
+                                                   ignore_warnings=False, comment=comment, **extra)
+                        except pywikibot.exceptions.APIError as e:
+                            if e.code in REFUSED_TITLE:   # this file's name is refused: set it aside, go on
+                                print(f"{p['num']}: title refused ({e.code}); set aside", flush=True)
+                                record(p, problems=[f"title refused by Commons: {e.code}"])
+                                continue
+                            raise
+                        if not ok:
                             sys.exit(f"{p['num']}: upload warning, failure or SHA-1 mismatch; stopping")
                         record(p, uploaded=True)
                 sdc = {**p["sdc"], "claims": [c for c in p["sdc"]["claims"]

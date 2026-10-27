@@ -19,10 +19,19 @@ def verify(src, dst, decode_source=True, level=0):
         for (oa, ca), (ob, cb) in zip(zip(pa.dataoffsets, pa.databytecounts), zip(pb.dataoffsets, pb.databytecounts)):
             fa.seek(oa); fb.seek(ob)
             assert ca == cb and fa.read(ca) == fb.read(cb), "compressed tile differs"
-        if decode_source:
-            assert np.array_equal(pa.asarray(), pb.asarray()), "decoded pixels differ"
-        else:
-            assert pb.asarray().shape == pa.shape, "decoded copy has another size"
+        try:
+            if decode_source:
+                assert np.array_equal(pa.asarray(), pb.asarray()), "decoded pixels differ"
+            else:
+                assert pb.asarray().shape == pa.shape, "decoded copy has another size"
+        except NotImplementedError:
+            # tifffile cannot decode some variants (Deflate with YCbCr subsampling); the tiles were compared byte
+            # for byte above, so only check that the copy decodes, with Pillow (libtiff)
+            from PIL import Image
+            Image.MAX_IMAGE_PIXELS = None
+            with Image.open(dst) as im:
+                im.load()
+                assert (im.size[1], im.size[0]) == tuple(pa.shape[:2]), "decoded copy has another size"
     return True
 
 
