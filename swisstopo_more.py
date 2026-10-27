@@ -92,6 +92,8 @@ def build_aerial(kind, item, reduced=None):
     scan; with `level` the copy is the scan's built-in reduced level (TIFF), without it a JPEG copy."""
     cfg, m = AERIAL[kind], item["meta"]
     inv = m["INVENTORY_NUMBER"]
+    if "YEAR" not in m and "DATE_YEAR" in m:   # newer records (1990s colour): DATE_YEAR / DATE_STRING (09.08.1994)
+        m = {**m, "YEAR": m["DATE_YEAR"], "ACQUIRED": m.get("DATE_STRING")}
     acquired = m.get("ACQUIRED") or ""
     year = m.get("YEAR") or (acquired[-4:] if acquired[-4:].isdigit() else None)   # some records have no YEAR
     if not year:
