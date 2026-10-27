@@ -276,6 +276,35 @@ def built_in_level(src):
     return level, sizes[level], sizes[0]
 
 
+def reduce_scan(src, dst, size):
+    """For scans whose reduced levels no viewer reads (Deflate with YCbCr subsampling, which Commons previews as green
+    bands): resize the full scan (level 0) with Lanczos to `size`, the chosen level's size, and save a JPEG-compressed
+    TIFF (quality 92). The horizontal pass runs one band of tiles at a time, so the full scan is never in memory;
+    Pillow resizes in the same two passes, so the result equals a one-shot resize. Checks that the copy decodes to
+    the resized pixels."""
+    import numpy as np
+    from PIL import Image
+
+    Image.MAX_IMAGE_PIXELS = None
+    with tifffile.TiffFile(src) as t:
+        page = t.pages[0]
+        if page.dtype.name != "uint8" or len(page.shape) not in (2, 3) or (len(page.shape) == 3 and page.shape[2] != 3):
+            raise ValueError(f"unexpected scan layout {page.shape} {page.dtype}")
+        mode = "L" if len(page.shape) == 2 else "RGB"
+        parts = [np.asarray(Image.fromarray(b[:, :, 0] if mode == "L" else b).resize((size[0], b.shape[0]), Image.LANCZOS))
+                 for b in _bands(page)]
+    out = Image.fromarray(np.concatenate(parts)).resize(size, Image.LANCZOS)   # width matches: vertical pass only
+    del parts
+    out.save(dst, "TIFF", compression="jpeg", quality=92)
+    with Image.open(dst) as check:
+        check.load()
+        if check.size != tuple(size) or check.mode != mode:
+            raise ValueError(f"saved copy is {check.size} {check.mode}, expected {tuple(size)} {mode}")
+        diff = np.abs(np.asarray(check, np.int16) - np.asarray(out, np.int16)).mean()
+    if diff > 4:
+        raise ValueError(f"saved copy differs from the resized scan by {diff:.1f} on average")
+
+
 def prepare_reduced(kind, item, meta, p):
     """Vertical aerial image: duplicate check by inventory number, download the raw scan, copy out its built-in
     reduced level (no decoding or re-encoding; verified tile by tile), build the page and dry-run it."""
@@ -293,8 +322,13 @@ def prepare_reduced(kind, item, meta, p):
         wait_for_disk(kind)
         p["source_sha1"], p["source_bytes"] = download(url, src)
         level, size, source_size = built_in_level(src)
-        strip_overviews(src, dst, level=level)
-        verify(src, dst, level=level)
+        with tifffile.TiffFile(src) as t:
+            copyable = t.pages[level].compression.name == "JPEG" or level == 0
+        if copyable:
+            strip_overviews(src, dst, level=level)
+            verify(src, dst, level=level)
+        else:
+            reduce_scan(src, dst, size)
         os.remove(src)
     except Exception as e:
         p.update(problems=[f"file check failed: {type(e).__name__}: {e}"])
@@ -304,13 +338,13 @@ def prepare_reduced(kind, item, meta, p):
         return p
     try:
         built = more.build_aerial(kind, {**item, "meta": meta},
-                                  reduced=dict(size=size, source_size=source_size, level=level))
+                                  reduced=dict(size=size, source_size=source_size, level=level, resized=not copyable))
     except Exception as e:  # odd record: set aside for review
         os.remove(dst)
         p["problems"] = [f"build failed: {type(e).__name__}: {e}"]
         return p
     p.update(built, item_id=item["id"], kind=kind, request=REQUEST, stripped=dst, verified=True,
-             reduced_size=list(size), source_size=list(source_size), reduced_level=level,
+             reduced_size=list(size), source_size=list(source_size), reduced_level=None if not copyable else level,
              reduced_bytes=os.path.getsize(dst),
              comment=f"Upload swisstopo {KINDS[kind]['label']} {built['num']}, reduced-resolution copy ([[{REQUEST}]])")
     problems = []

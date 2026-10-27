@@ -127,7 +127,10 @@ def build_aerial(kind, item, reduced=None):
     if reduced:
         (w, h), (sw, sh) = reduced["size"], reduced["source_size"]
         stac = f"https://data.geo.admin.ch/api/stac/v1/collections/{cfg['collection']}/items/{item['id']}"
-        if "level" in reduced:
+        if reduced.get("resized"):     # the scan's own reduced levels are unreadable (Deflate YCbCr): resized from the scan
+            source_note = (f"reduced-resolution copy ({w} × {h} px, JPEG-compressed TIFF) of the full-resolution scan "
+                           f"({sw} × {sh} px), which is available from swisstopo: [{stac} STAC item]")
+        elif "level" in reduced:
             source_note = (f"reduced-resolution copy ({w} × {h} px): the scan's own built-in reduced level, copied "
                            f"without re-encoding, of the full-resolution scan ({sw} × {sh} px), which is available from "
                            f"swisstopo: [{stac} STAC item]")
